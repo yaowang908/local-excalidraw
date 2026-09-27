@@ -1,0 +1,445 @@
+import { expect, test, type Page } from "@playwright/test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+
+type TestScene = {
+  type: string;
+  version: number;
+  source: string;
+  elements: Record<string, unknown>[];
+  appState: Record<string, unknown>;
+  files: Record<string, unknown>;
+};
+declare global {
+  interface Window {
+    testWorkspace: {
+      files: Record<string, string>;
+      saves: string[];
+      external: (path: string, scene: TestScene) => void;
+    };
+  }
+}
+
+const initial: TestScene = {
+  type: "excalidraw",
+  version: 2,
+  source: "fixture",
+  appState: { viewBackgroundColor: "#ffffff" },
+  files: {},
+  elements: [
+    {
+      id: "api",
+      type: "rectangle",
+      x: 200,
+      y: 200,
+      width: 200,
+      height: 110,
+      angle: 0,
+      strokeColor: "#1e1e1e",
+      backgroundColor: "#dbe4ff",
+      fillStyle: "solid",
+      strokeWidth: 2,
+      strokeStyle: "solid",
+      roughness: 1,
+      opacity: 100,
+      groupIds: [],
+      frameId: null,
+      roundness: { type: 3 },
+      seed: 12,
+      version: 1,
+      versionNonce: 1,
+      isDeleted: false,
+      boundElements: null,
+      updated: 1,
+      link: null,
+      locked: false,
+    },
+  ],
+};
+
+// The browser runs the real editor and document controller. Only the native IPC
+// boundary is simulated; native disk, locks, and OS watcher are covered by cargo test.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript((scene) => {
+    Object.defineProperty(window, "isTauri", { value: true });
+    const files: Record<string, string> = {
+      "architecture/api.excalidraw": JSON.stringify(scene),
+      "scratch.excalidraw": JSON.stringify({ ...scene, elements: [] }),
+    };
+    const folders = new Set(["architecture"]);
+    const callbacks = new Map<number, (payload: unknown) => void>();
+    const listeners = new Map<string, number[]>();
+    let callbackId = 0;
+    const hash = (content: string) => content;
+    const snapshot = (path: string) => {
+      const content = files[path];
+      if (content === undefined)
+        throw { code: "missing", message: "File removed" };
+      return { content, hash: hash(content), modifiedAt: 1 };
+    };
+    const emit = () => {
+      for (const id of listeners.get("workspace-changed") ?? [])
+        callbacks.get(id)?.({
+          event: "workspace-changed",
+          payload: { root: "/workspace", error: null },
+        });
+    };
+    type Entry = {
+      path: string;
+      name: string;
+      kind: string;
+      children: Entry[];
+    };
+    const tree = (directory = ""): Entry[] => {
+      const children: Entry[] = [];
+      for (const path of [...folders, ...Object.keys(files)]) {
+        const parent = path.includes("/")
+          ? path.slice(0, path.lastIndexOf("/"))
+          : "";
+        if (parent !== directory) continue;
+        children.push({
+          path,
+          name: path.split("/").pop() ?? path,
+          kind: folders.has(path) ? "folder" : "drawing",
+          children: folders.has(path) ? tree(path) : [],
+        });
+      }
+      return children;
+    };
+    window.testWorkspace = {
+      files,
+      saves: [],
+      external: (path, value) => {
+        files[path] = JSON.stringify(value);
+        emit();
+      },
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {
+        metadata: {
+          currentWindow: { label: "main" },
+          currentWebview: { label: "main", windowLabel: "main" },
+        },
+        transformCallback: (callback: (payload: unknown) => void) => {
+          const id = ++callbackId;
+          callbacks.set(id, callback);
+          return id;
+        },
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          const path = String(args.path ?? "");
+          if (command === "load_preferences")
+            return {
+              workspacePath: "/workspace",
+              openTabs: [],
+              activeTab: null,
+            };
+          if (
+            command === "save_preferences" ||
+            command === "reveal_entry" ||
+            command === "exit_app"
+          )
+            return;
+          if (command === "open_workspace" || command === "plugin:dialog|open")
+            return "/workspace";
+          if (command === "list_entries") return tree();
+          if (command === "read_document") return snapshot(path);
+          if (command === "save_document") {
+            const existing = files[path];
+            if (
+              (existing === undefined ? null : hash(existing)) !==
+              args.expectedHash
+            )
+              throw { code: "conflict", message: "File changed externally" };
+            files[path] = String(args.content);
+            window.testWorkspace.saves.push(path);
+            emit();
+            return snapshot(path);
+          }
+          if (command === "create_folder") {
+            folders.add(path);
+            emit();
+            return;
+          }
+          if (command === "move_entry") {
+            const from = String(args.from);
+            const to = String(args.to);
+            for (const key of Object.keys(files))
+              if (key === from || key.startsWith(`${from}/`)) {
+                files[to + key.slice(from.length)] = String(files[key]);
+                delete files[key];
+              }
+            for (const key of [...folders])
+              if (key === from || key.startsWith(`${from}/`)) {
+                folders.add(to + key.slice(from.length));
+                folders.delete(key);
+              }
+            emit();
+            return;
+          }
+          if (command === "trash_entry") {
+            delete files[path];
+            emit();
+            return;
+          }
+          if (command === "plugin:event|listen") {
+            const event = String(args.event);
+            const id = Number(args.handler);
+            listeners.set(event, [...(listeners.get(event) ?? []), id]);
+            return id;
+          }
+          if (command === "plugin:event|unlisten") return;
+          throw new Error(`Unhandled test command: ${command}`);
+        },
+      },
+    });
+    Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
+      value: {
+        unregisterListener: (_event: string, id: number) =>
+          callbacks.delete(id),
+      },
+    });
+  }, initial);
+  await page.goto("/");
+  await expect(
+    page.getByRole("button", { name: "api", exact: true }),
+  ).toBeVisible();
+});
+
+async function openApi(page: Page) {
+  await page.getByRole("button", { name: "api", exact: true }).click();
+  await expect(
+    page.locator(".canvas-pane:not([hidden]) canvas.interactive"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("All changes saved", { exact: true }),
+  ).toBeVisible();
+}
+
+async function drawRectangle(page: Page) {
+  const canvas = page.locator(".canvas-pane:not([hidden]) canvas.interactive");
+  await canvas.click({ position: { x: 600, y: 450 } });
+  await page.keyboard.press("r");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas has no bounds");
+  await page.mouse.move(bounds.x + 590, bounds.y + 430);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 730, bounds.y + 520, { steps: 5 });
+  await page.mouse.up();
+}
+
+test("loads an MCP-generated diagram in the real editor and preserves bindings after a canvas edit", async ({
+  page,
+}) => {
+  const root = await mkdtemp("/private/tmp/excalidraw-render-test-");
+  const client = new Client({ name: "browser-test", version: "1.0.0" });
+  try {
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [resolve("apps/mcp/src/index.ts"), "--workspace", root],
+      }),
+    );
+    const result = await client.callTool({
+      name: "create_diagram",
+      arguments: {
+        path: "architecture.excalidraw",
+        elements: [
+          {
+            id: "browser",
+            type: "rectangle",
+            x: 100,
+            y: 150,
+            width: 180,
+            height: 100,
+            text: "Browser",
+            style: { backgroundColor: "#dbe4ff" },
+          },
+          {
+            id: "api",
+            type: "rectangle",
+            x: 400,
+            y: 150,
+            width: 180,
+            height: 100,
+            text: "API server",
+            style: { backgroundColor: "#d3f9d8" },
+          },
+          {
+            id: "db",
+            type: "ellipse",
+            x: 700,
+            y: 150,
+            width: 200,
+            height: 100,
+            text: "PostgreSQL",
+            style: { backgroundColor: "#fff3bf" },
+          },
+        ],
+        operations: [
+          {
+            op: "connect",
+            id: "http",
+            from: "browser",
+            to: "api",
+            label: "HTTPS",
+          },
+          { op: "connect", id: "sql", from: "api", to: "db", label: "SQL" },
+        ],
+      },
+    });
+    expect(result.isError).not.toBe(true);
+    const scene = JSON.parse(
+      await readFile(join(root, "architecture.excalidraw"), "utf8"),
+    ) as TestScene;
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.evaluate(
+      (scene) =>
+        window.testWorkspace.external("architecture/api.excalidraw", scene),
+      scene,
+    );
+    await openApi(page);
+    await page.screenshot({ path: "output/playwright/mcp-diagram.png" });
+    await drawRectangle(page);
+    await expect
+      .poll(() => page.evaluate(() => window.testWorkspace.saves.length))
+      .toBe(1);
+    const saved = await page.evaluate(
+      () =>
+        JSON.parse(
+          window.testWorkspace.files["architecture/api.excalidraw"] ?? "{}",
+        ) as TestScene,
+    );
+    expect(saved.elements.find((item) => item.id === "http")).toMatchObject({
+      startBinding: { elementId: "browser" },
+      endBinding: { elementId: "api" },
+    });
+    expect(
+      saved.elements.find((item) => item.id === "api-label"),
+    ).toMatchObject({ originalText: "API server", containerId: "api" });
+    expect(saved.elements.filter((item) => !item.isDeleted)).toHaveLength(11);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await client.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("opens fixtures without rewriting, edits, autosaves, and keeps tab scenes", async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await openApi(page);
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => window.testWorkspace.saves)).toEqual([]);
+  await drawRectangle(page);
+  await expect
+    .poll(() => page.evaluate(() => window.testWorkspace.saves.length))
+    .toBe(1);
+  await page.getByRole("button", { name: "scratch", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "scratch", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "api", exact: true }).click();
+  expect(
+    await page.evaluate(
+      () =>
+        JSON.parse(
+          window.testWorkspace.files["architecture/api.excalidraw"] ?? "{}",
+        ).elements.length,
+    ),
+  ).toBe(2);
+  expect(pageErrors).toEqual([]);
+  await page.screenshot({ path: "output/playwright/workspace.png" });
+});
+
+test("reloads clean external edits and protects dirty edits", async ({
+  page,
+}) => {
+  await openApi(page);
+  const external = { ...initial, appState: { viewBackgroundColor: "#f4fce3" } };
+  await page.evaluate(
+    (scene) =>
+      window.testWorkspace.external("architecture/api.excalidraw", scene),
+    external,
+  );
+  await expect(
+    page.getByText("Updated externally", { exact: true }),
+  ).toBeVisible();
+  await drawRectangle(page);
+  await page.evaluate(
+    (scene) =>
+      window.testWorkspace.external("architecture/api.excalidraw", scene),
+    { ...external, appState: { viewBackgroundColor: "#fff4e6" } },
+  );
+  await expect(
+    page.getByRole("region", { name: "File conflict" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Keep my version", exact: true })
+    .click();
+  await expect(
+    page.getByRole("region", { name: "File conflict" }),
+  ).toBeHidden();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(
+            window.testWorkspace.files["architecture/api.excalidraw"] ?? "{}",
+          ).elements.length,
+      ),
+    )
+    .toBe(2);
+});
+
+test("creates, renames, moves, and trashes drawings through reviewable dialogs", async ({
+  page,
+}) => {
+  await page
+    .getByRole("button", { name: "New drawing", exact: false })
+    .first()
+    .click();
+  await page.getByLabel("Name", { exact: true }).fill("new-diagram");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "new-diagram", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Actions for new-diagram.excalidraw" })
+    .click();
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await page.getByLabel("Name", { exact: true }).fill("renamed.excalidraw");
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "renamed", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Actions for renamed.excalidraw" })
+    .click();
+  await page.getByRole("menuitem", { name: "Move…", exact: true }).click();
+  await page
+    .getByLabel("Destination path")
+    .fill("architecture/renamed.excalidraw");
+  await page.getByRole("button", { name: "Move", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Boolean(window.testWorkspace.files["architecture/renamed.excalidraw"]),
+      ),
+    )
+    .toBe(true);
+  await page
+    .getByRole("button", { name: "Actions for renamed.excalidraw" })
+    .click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await page
+    .getByRole("button", { name: "Move to Trash", exact: true })
+    .click();
+  await expect(
+    page.getByRole("tab", { name: "renamed", exact: true }),
+  ).toBeHidden();
+});

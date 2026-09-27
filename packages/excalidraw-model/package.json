@@ -1,0 +1,16 @@
+{
+  "name": "@local-excalidraw/model",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./operations": "./src/operations.ts"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "peerDependencies": {
+    "@excalidraw/excalidraw": "0.18.1"
+  }
+}

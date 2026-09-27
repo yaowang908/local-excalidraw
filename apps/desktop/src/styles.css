@@ -1,0 +1,564 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  font-size: 13px;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input {
+  font: inherit;
+}
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover {
+  background: var(--hover);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button svg {
+  flex-shrink: 0;
+}
+kbd {
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 14px;
+}
+.app-shell {
+  --surface: #ffffff;
+  --sidebar: #f5f5f6;
+  --toolbar: #f9f9fa;
+  --hover: #e8e9eb;
+  --selected: #e4edf3;
+  --border: #dfe1e4;
+  --text: #25282d;
+  --muted: #6b7078;
+  --accent: #315f80;
+  --danger: #a53732;
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--surface);
+}
+.app-shell[data-theme="dark"] {
+  --surface: #202124;
+  --sidebar: #27282c;
+  --toolbar: #242529;
+  --hover: #36383e;
+  --selected: #304352;
+  --border: #3b3d43;
+  --text: #e5e6e8;
+  --muted: #a2a5ad;
+  --accent: #88b4d4;
+  --danger: #ed938d;
+}
+.workspace-toolbar {
+  height: 48px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--toolbar);
+  user-select: none;
+}
+.icon-button {
+  padding: 5px;
+  border-color: transparent;
+  background: transparent;
+}
+.workspace-switcher {
+  position: relative;
+}
+.workspace-button {
+  border-color: transparent;
+  background: transparent;
+  gap: 9px;
+  font-weight: 550;
+  max-width: 340px;
+}
+.workspace-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toolbar-separator {
+  height: 17px;
+  border-left: 1px solid var(--border);
+  margin: 0 4px;
+}
+.app-title {
+  color: var(--muted);
+  font-size: 12px;
+}
+.toolbar-end {
+  margin-left: auto;
+}
+.toolbar-action {
+  background: transparent;
+  border-color: transparent;
+}
+.workspace-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+.sidebar {
+  width: 252px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+  user-select: none;
+}
+.sidebar-heading {
+  height: 45px;
+  padding: 0 12px 0 19px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.sidebar-heading > div {
+  display: flex;
+  gap: 3px;
+}
+.tree-scroll {
+  overflow: auto;
+  flex: 1;
+  padding: 0 6px 20px;
+}
+.file-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  min-height: 31px;
+  padding-right: 3px;
+}
+.tree-row:hover {
+  background: var(--hover);
+}
+.tree-row.selected {
+  background: var(--selected);
+}
+.tree-open {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  justify-content: flex-start;
+  text-align: left;
+  background: transparent;
+  gap: 6px;
+}
+.tree-open:hover {
+  background: transparent;
+}
+.tree-open > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-open svg {
+  color: var(--muted);
+}
+.tree-indent {
+  width: 13px;
+  flex-shrink: 0;
+}
+.entry-actions {
+  opacity: 0;
+}
+.tree-row:hover .entry-actions,
+.tree-row:focus-within .entry-actions {
+  opacity: 1;
+}
+.sidebar-empty {
+  padding: 10px 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.sidebar-empty p {
+  margin: 0 0 7px;
+}
+.text-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+}
+.text-button:hover {
+  text-decoration: underline;
+  background: transparent;
+}
+.workspace-location {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 13px 15px;
+  color: var(--muted);
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+}
+.workspace-location span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-location svg {
+  flex-shrink: 0;
+}
+.editor-area {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.tab-bar {
+  display: flex;
+  height: 39px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  display: flex;
+  align-items: center;
+  min-width: 130px;
+  max-width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+}
+.tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.tab > button:first-child {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  justify-content: flex-start;
+  padding: 0 7px 0 15px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+.tab > button:first-child > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-close {
+  margin: 0 6px 0 2px;
+}
+.dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.canvas-stack {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.canvas-pane {
+  position: absolute;
+  inset: 0;
+}
+.canvas-pane[hidden] {
+  display: none;
+}
+.canvas-error {
+  padding: 40px;
+  max-width: 620px;
+  line-height: 1.6;
+}
+.excalidraw {
+  --color-primary: #315f80;
+  --color-primary-darker: #23445c;
+  --color-primary-darkest: #183344;
+  --color-primary-light: #dce8f0;
+}
+.status-bar {
+  height: 29px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 15px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--toolbar);
+}
+.status-bar > div {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-left: auto;
+}
+.status-bar > div > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.document-path {
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.autosave-label {
+  border-left: 1px solid var(--border);
+  padding-left: 13px;
+}
+.status-attention {
+  color: var(--danger);
+}
+.empty-workspace {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 40px;
+}
+.empty-content {
+  max-width: 455px;
+  margin-top: -35px;
+}
+.empty-content > svg {
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+h1 {
+  margin: 0 0 13px;
+  font-size: 28px;
+  font-weight: 550;
+  letter-spacing: -0.6px;
+  line-height: 1.2;
+}
+.empty-content p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 0 0 24px;
+}
+.primary-button {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+  padding: 9px 13px;
+}
+.primary-button:hover {
+  filter: brightness(0.94);
+  background: var(--accent);
+}
+.primary-button kbd {
+  color: inherit;
+  opacity: 0.8;
+}
+.empty-hint {
+  display: flex;
+  gap: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 38px;
+}
+.empty-hint span + span {
+  border-left: 1px solid var(--border);
+  padding-left: 18px;
+}
+.empty-content .browser-note {
+  margin-top: 20px;
+  font-size: 12px;
+}
+.error-strip {
+  padding: 9px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.error-strip > svg {
+  color: var(--danger);
+  flex-shrink: 0;
+}
+.error-strip > span {
+  flex: 1;
+}
+.conflict-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--toolbar);
+  border-bottom: 1px solid var(--border);
+}
+.conflict-bar strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.conflict-bar p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.conflict-actions {
+  display: flex;
+  gap: 6px;
+}
+.conflict-actions button {
+  font-size: 12px;
+}
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+.menu-backdrop:hover {
+  background: transparent;
+}
+.context-menu {
+  position: fixed;
+  z-index: 21;
+  min-width: 215px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 5px 20px #0002;
+}
+.context-menu button {
+  border: 0;
+  width: 100%;
+  justify-content: flex-start;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+.context-menu button kbd {
+  margin-left: auto;
+}
+.context-menu hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 3px;
+}
+.workspace-menu {
+  position: absolute;
+  top: 37px;
+  left: 0;
+  min-width: 250px;
+}
+.danger-text,
+.form-error {
+  color: var(--danger);
+}
+.prompt {
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 26px;
+  width: min(460px, 90vw);
+  box-shadow: 0 20px 70px #0003;
+}
+.prompt::backdrop {
+  background: #0004;
+}
+.prompt h2 {
+  margin: 0 0 10px;
+  font-size: 19px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.prompt p {
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0 0 20px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.field input {
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-weight: 400;
+}
+.prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 25px;
+}
+.prompt .form-error {
+  color: var(--danger);
+  margin: 12px 0 0;
+}
+.danger-button {
+  color: var(--danger);
+}
+@media (max-width: 1050px) {
+  .sidebar {
+    width: 215px;
+  }
+  .app-title,
+  .toolbar-separator,
+  .autosave-label {
+    display: none !important;
+  }
+  .empty-hint {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+}
