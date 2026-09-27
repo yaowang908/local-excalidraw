@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+mod embeds;
+
 struct Workspace {
     fs: WorkspaceFs,
     _watcher: WorkspaceWatcher,
@@ -207,11 +209,17 @@ fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn youtube_embed_base(server: tauri::State<embeds::EmbedServer>) -> String {
+    server.base.clone()
+}
+
 /// Launch the local desktop workspace.
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(embeds::EmbedServer::start().expect("Cannot start YouTube player listener"))
         .invoke_handler(tauri::generate_handler![
             open_workspace,
             list_entries,
@@ -223,7 +231,8 @@ pub fn run() {
             reveal_entry,
             load_preferences,
             save_preferences,
-            exit_app
+            exit_app,
+            youtube_embed_base
         ])
         .build(tauri::generate_context!())
         .expect("Cannot initialize Local Excalidraw");

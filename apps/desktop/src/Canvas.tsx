@@ -1,8 +1,11 @@
-import { Component, useMemo, type ReactNode } from "react";
+import { Component, useEffect, useMemo, useState, type ReactNode } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Excalidraw, MainMenu, serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { mergeEditorScene, parseScene } from "@local-excalidraw/model";
 import type { Documents, OpenDocument } from "./documents";
+import { youtubePlayerPath } from "./embeds";
+import { errorMessage } from "./filesystem";
 
 /** One mounted editor per tab preserves selections, viewport, and undo history. */
 export function Canvas({
@@ -45,7 +48,11 @@ export function Canvas({
           handleKeyboardGlobally={false}
           autoFocus={active}
           aiEnabled={false}
-          validateEmbeddable={false}
+          validateEmbeddable={(link) => youtubePlayerPath(link) !== null}
+          renderEmbeddable={(element) => {
+            const path = youtubePlayerPath(element.link);
+            return path ? <YouTubePlayer path={path} /> : null;
+          }}
           UIOptions={{
             canvasActions: {
               loadScene: false,
@@ -64,6 +71,40 @@ export function Canvas({
         </Excalidraw>
       </SceneBoundary>
     </div>
+  );
+}
+
+function YouTubePlayer({ path }: { path: string }) {
+  const [base, setBase] = useState<string | null>(() =>
+    isTauri() ? null : "https://www.youtube.com/embed",
+  );
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let mounted = true;
+    void invoke<string>("youtube_embed_base")
+      .then((url) => {
+        if (mounted) setBase(url);
+      })
+      .catch((error: unknown) => {
+        if (mounted) setError(errorMessage(error));
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  if (error) return <div role="alert">Could not load YouTube player: {error}</div>;
+  if (!base) return <div>Loading video…</div>;
+  return (
+    <iframe
+      className="excalidraw__embeddable"
+      src={`${base}/${path}`}
+      title="YouTube video player"
+      referrerPolicy="strict-origin-when-cross-origin"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+      allowFullScreen
+      sandbox="allow-same-origin allow-scripts allow-popups allow-presentation"
+    />
   );
 }
 

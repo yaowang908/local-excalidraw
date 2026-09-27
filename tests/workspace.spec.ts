@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
@@ -17,6 +18,8 @@ declare global {
     testWorkspace: {
       files: Record<string, string>;
       saves: string[];
+      embedBase: string;
+      embedError: string | null;
       external: (path: string, scene: TestScene) => void;
     };
   }
@@ -111,6 +114,8 @@ test.beforeEach(async ({ page }) => {
     window.testWorkspace = {
       files,
       saves: [],
+      embedBase: "https://www.youtube.com/embed",
+      embedError: null,
       external: (path, value) => {
         files[path] = JSON.stringify(value);
         emit();
@@ -135,6 +140,11 @@ test.beforeEach(async ({ page }) => {
               openTabs: [],
               activeTab: null,
             };
+          if (command === "youtube_embed_base") {
+            if (window.testWorkspace.embedError)
+              throw new Error(window.testWorkspace.embedError);
+            return window.testWorkspace.embedBase;
+          }
           if (
             command === "save_preferences" ||
             command === "reveal_entry" ||
@@ -228,6 +238,119 @@ async function drawRectangle(page: Page) {
   await page.mouse.move(bounds.x + 730, bounds.y + 520, { steps: 5 });
   await page.mouse.up();
 }
+
+test("renders native YouTube embeds with an HTTP Referer under the desktop frame policy", async ({
+  page,
+}) => {
+  // Only the native HTTP boundary is simulated; Rust tests exercise the actual listener.
+  const server = createServer((request, response) => {
+    const id = request.url?.split("/").pop() ?? "";
+    response.writeHead(200, {
+      "Content-Type": "text/html",
+      "Referrer-Policy": "strict-origin-when-cross-origin",
+    });
+    response.end(
+      `<iframe title="YouTube video player" src="https://www.youtube.com/embed/${id}"></iframe>`,
+    );
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Missing test player address");
+    const origin = `http://127.0.0.1:${address.port}`;
+    await page.evaluate((base) => {
+      window.testWorkspace.embedBase = base;
+    }, `${origin}/fixture`);
+    const config = JSON.parse(
+      await readFile(resolve("apps/desktop/src-tauri/tauri.conf.json"), "utf8"),
+    ) as { app: { security: { csp: string } } };
+    await page.evaluate((csp) => {
+      const policy = document.createElement("meta");
+      policy.httpEquiv = "Content-Security-Policy";
+      policy.content = csp;
+      document.head.append(policy);
+    }, config.app.security.csp);
+
+    const referrers: string[] = [];
+    await page.route("https://www.youtube.com/embed/**", (route) => {
+      referrers.push(route.request().headers().referer ?? "");
+      return route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><title>YouTube fixture</title><button>Play video</button>",
+      });
+    });
+    const links = [
+      "https://www.youtube.com/watch?v=gJrjgg1KVL4",
+      "https://youtu.be/qw--VYLpxG4?si=aDfMJrqFoZM0WDB1",
+      "https://vimeo.com/123456789",
+      "https://example.com/video",
+    ];
+    const scene: TestScene = {
+      ...initial,
+      elements: links.map((link, index) => ({
+        ...initial.elements[0],
+        id: `embed-${index}`,
+        type: "embeddable",
+        x: 100 + (index % 2) * 450,
+        y: 100 + Math.floor(index / 2) * 280,
+        width: 400,
+        height: 225,
+        link,
+      })),
+    };
+    await page.evaluate((scene) => {
+      window.testWorkspace.external("architecture/api.excalidraw", scene);
+    }, scene);
+    await openApi(page);
+
+    for (const id of ["gJrjgg1KVL4", "qw--VYLpxG4"]) {
+      const frame = page
+        .frameLocator(`iframe[src="${origin}/fixture/${id}"]`)
+        .frameLocator(`iframe[src="https://www.youtube.com/embed/${id}"]`);
+      await expect(frame.getByRole("button", { name: "Play video" })).toBeVisible();
+    }
+    await expect(page.locator(".canvas-pane iframe")).toHaveCount(2);
+    expect(referrers).toEqual([`${origin}/`, `${origin}/`]);
+    expect(await page.evaluate(() => window.testWorkspace.saves)).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test("reports player setup failure while keeping the drawing editable", async ({
+  page,
+}) => {
+  await page.evaluate(
+    (scene) => {
+      window.testWorkspace.embedError = "Player listener unavailable";
+      window.testWorkspace.external("architecture/api.excalidraw", scene);
+    },
+    {
+      ...initial,
+      elements: [{
+        ...initial.elements[0],
+        type: "embeddable",
+        width: 400,
+        height: 225,
+        link: "https://youtu.be/QkdkLdMBuL0",
+      }],
+    },
+  );
+  await openApi(page);
+  await expect(page.getByRole("alert")).toHaveText(
+    "Could not load YouTube player: Player listener unavailable",
+  );
+  await drawRectangle(page);
+  await expect
+    .poll(() => page.evaluate(() => window.testWorkspace.saves.length))
+    .toBeGreaterThan(0);
+});
 
 test("loads an MCP-generated diagram in the real editor and preserves bindings after a canvas edit", async ({
   page,
