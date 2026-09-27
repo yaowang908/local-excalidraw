@@ -1,0 +1,40 @@
+{
+  "name": "local-excalidraw",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/desktop",
+    "apps/mcp",
+    "packages/excalidraw-model"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @local-excalidraw/desktop",
+    "desktop": "npm run tauri --workspace @local-excalidraw/desktop -- dev",
+    "build": "npm run build --workspace @local-excalidraw/desktop",
+    "bundle": "npm run tauri --workspace @local-excalidraw/desktop -- build --bundles app",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:rust": "cargo test --manifest-path packages/filesystem/Cargo.toml && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "build:mcp": "cargo build --release --manifest-path packages/filesystem/Cargo.toml --bin excalidraw-fs",
+    "mcp": "node apps/mcp/src/index.ts",
+    "test:e2e": "playwright test"
+  },
+  "overrides": {
+    "@excalidraw/excalidraw": {
+      "nanoid": "3.3.19"
+    },
+    "@excalidraw/mermaid-to-excalidraw": {
+      "nanoid": "5.1.16"
+    },
+    "lodash-es": "4.18.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "~5.9.3",
+    "vitest": "5.0.1"
+  }
+}

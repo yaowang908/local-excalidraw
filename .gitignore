@@ -1,0 +1,13 @@
+node_modules/
+dist/
+target/
+apps/desktop/public/excalidraw-assets/
+test-results/
+playwright-report/
+.DS_Store
+output/playwright/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/icons/android/
+apps/desktop/src-tauri/icons/ios/
+apps/desktop/src-tauri/icons/Square*.png
+apps/desktop/src-tauri/icons/StoreLogo.png
