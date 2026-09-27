@@ -54,6 +54,16 @@ distribution. `npm run dev` runs a browser preview; native file access requires
   retained. `.excalidrawlib` entries import into an open drawing's library;
   library-file editing and persistence are not part of this milestone.
 
+YouTube video embeddables render as players. Double-click a player to activate
+it, then click **Play**. Watch, short-link, Shorts, and embed video URLs are
+supported, including start times. Playback requires an internet connection.
+The native app serves a small player wrapper on a random loopback port with a
+per-launch URL token so YouTube receives an HTTP Referer. This endpoint serves
+only player HTML, exposes no files or native commands, and closes with the app.
+Requests are read-only and safe to retry; the port and URL change after a restart
+without rewriting drawing links. Videos load directly from YouTube. Other frame
+hosts remain blocked.
+
 ## Keyboard shortcuts
 
 | Shortcut    | Action                                                  |
