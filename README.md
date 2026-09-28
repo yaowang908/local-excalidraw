@@ -120,8 +120,24 @@ Cooperating writers are serialized. An unrelated editor that ignores the lock
 can still write between the final hash check and rename; ordinary filesystem
 APIs do not provide compare-and-swap against arbitrary external writers. This
 remaining race is an accepted limitation, not a guarantee of universal conflict
-prevention. Use local storage; network shares and synchronization providers are
-outside the locking guarantee.
+prevention. Cloud sync clients and other devices do not honor the local lock.
+The desktop preserves the last app-written drawing and any pending save under
+`~/Library/Application Support/app.local-excalidraw.desktop/recovery/`, outside
+the chosen workspace. It compares these checkpoints with the workspace file on
+restart and asks which version to use when they differ. A dirty incoming change
+also gets a create-only sibling drawing before the original can be replaced.
+Resolved versions are removed or replaced; recovery records use an OS lock so
+multiple desktop processes cannot race while updating them.
+
+The desktop lists the workspace root first and loads subfolders when expanded.
+Native events and paced checks re-read open drawings and visible folders without
+content-scanning the whole tree. Slow provider operations run outside the app's
+workspace state lock and return a retryable error after 15 seconds. A timed-out
+write may still finish later; its checkpoint remains until the file is read
+again. macOS File Provider paths under `~/Library/CloudStorage` or
+`~/Library/Mobile Documents` use coordinated reads and replacements. Other sync
+folders use ordinary filesystem I/O with the same local checkpoint and conflict
+handling. A local save does not confirm cloud upload or remote acceptance.
 
 The native write primitive accepts a retry with identical bytes without another
 write. MCP requires a current hash and does not automatically retry semantic
@@ -129,8 +145,9 @@ operations; after an uncertain result, re-read and reconcile before retrying.
 Stable IDs and create-only writes prevent duplicate creation or replacement.
 A crash during replacement leaves either the old or new complete
 file; a hidden temporary file can remain after an abrupt process kill. Changes
-within the autosave debounce window can be lost on a force quit or crash because
-recovery snapshots are deferred.
+within the autosave debounce window can still be lost before a checkpoint is
+written. A file provider that never returns may keep a background I/O worker
+occupied; the desktop limits these workers and remains available for other files.
 
 Workspace paths are canonicalized and checked by path components. Absolute
 document paths, parent traversal, hidden paths, and symlinks inside the workspace

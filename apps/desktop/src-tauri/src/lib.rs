@@ -2,21 +2,160 @@ use local_excalidraw_filesystem as filesystem;
 
 use filesystem::{Entry, Result, Snapshot, WorkspaceError, WorkspaceFs, WorkspaceWatcher};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::mpsc::{sync_channel, RecvTimeoutError};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 mod embeds;
+mod recovery;
+use recovery::{RecoveryRecord, RecoveryStore};
 
 struct Workspace {
-    fs: WorkspaceFs,
+    fs: Arc<WorkspaceFs>,
     _watcher: WorkspaceWatcher,
 }
 
 #[derive(Default)]
 struct AppState(Mutex<Option<Workspace>>);
+
+static ACTIVE_IO: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+struct IoPermit(String);
+
+impl Drop for IoPermit {
+    fn drop(&mut self) {
+        if let Some(active) = ACTIVE_IO.get() {
+            if let Ok(mut active) = active.lock() {
+                active.remove(&self.0);
+            }
+        }
+    }
+}
+
+fn begin_io(key: String) -> Result<IoPermit> {
+    let active = ACTIVE_IO.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut active = active
+        .lock()
+        .map_err(|_| WorkspaceError::new("io", "I/O state lock poisoned"))?;
+    if active.contains(&key) {
+        return Err(WorkspaceError::new(
+            "busy",
+            "This file operation is still waiting for the cloud service. Retry after it finishes.",
+        ));
+    }
+    let root = key.split('\0').nth(1);
+    let waiting_here = active
+        .iter()
+        .filter(|item| item.split('\0').nth(1) == root)
+        .count();
+    if waiting_here >= 8 || active.len() >= 64 {
+        return Err(WorkspaceError::new(
+            "busy",
+            "Too many file operations are waiting in this folder. Retry shortly.",
+        ));
+    }
+    active.insert(key.clone());
+    Ok(IoPermit(key))
+}
+
+fn save_pending(root: &str, path: &str) -> Result<bool> {
+    let active = ACTIVE_IO.get_or_init(|| Mutex::new(HashSet::new()));
+    let active = active
+        .lock()
+        .map_err(|_| WorkspaceError::new("io", "I/O state lock poisoned"))?;
+    Ok(active.contains(&format!("save\0{root}\0{path}")))
+}
+
+async fn bounded_io<T: Send + 'static>(
+    key: String,
+    timeout_code: &'static str,
+    action: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    bounded_io_for(key, timeout_code, Duration::from_secs(15), action).await
+}
+
+async fn bounded_io_for<T: Send + 'static>(
+    key: String,
+    timeout_code: &'static str,
+    deadline: Duration,
+    action: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let permit = begin_io(key)?;
+    let (sender, receiver) = sync_channel(1);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        if sender.send(action()).is_err() {
+            eprintln!(
+                "Workspace I/O completed after its caller timed out; re-read before retrying"
+            );
+        }
+    });
+    let wait = tauri::async_runtime::spawn_blocking(move || receiver.recv_timeout(deadline))
+        .await
+        .map_err(|e| WorkspaceError::new("io", format!("Workspace wait task failed: {e}")))?;
+    match wait {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => Err(WorkspaceError::new(
+            timeout_code,
+            if timeout_code == "uncertain" {
+                "The cloud service has not finished this write. Its result is uncertain; local recovery is retained. Recheck the file before retrying."
+            } else {
+                "The cloud service has not returned this file yet. Retry when it is available."
+            },
+        )),
+        Err(RecvTimeoutError::Disconnected) => Err(WorkspaceError::new(
+            "io",
+            "Workspace I/O worker stopped unexpectedly",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod io_tests {
+    use super::*;
+
+    #[test]
+    fn timed_out_write_stays_busy_until_the_worker_finishes() {
+        let (release, wait) = sync_channel::<()>(1);
+        let first = tauri::async_runtime::block_on(bounded_io_for(
+            "test-cloud-write".into(),
+            "uncertain",
+            Duration::from_millis(20),
+            move || {
+                wait.recv().unwrap();
+                Ok(())
+            },
+        ));
+        assert_eq!(first.unwrap_err().code, "uncertain");
+        let retry = tauri::async_runtime::block_on(bounded_io_for(
+            "test-cloud-write".into(),
+            "uncertain",
+            Duration::from_millis(20),
+            || Ok(()),
+        ));
+        assert_eq!(retry.unwrap_err().code, "busy");
+        let local = tauri::async_runtime::block_on(bounded_io_for(
+            "read\0local-folder\0a.excalidraw".into(),
+            "unavailable",
+            Duration::from_millis(20),
+            || Ok(7),
+        ));
+        assert_eq!(local.unwrap(), 7);
+        release.send(()).unwrap();
+        for _ in 0..100 {
+            if ACTIVE_IO.get().unwrap().lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ACTIVE_IO.get().unwrap().lock().unwrap().is_empty());
+    }
+}
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -32,114 +171,214 @@ struct WorkspaceEvent {
     error: Option<String>,
 }
 
-fn with_workspace<T>(
+async fn with_workspace<T: Send + 'static>(
     state: &AppState,
     root: &str,
-    action: impl FnOnce(&WorkspaceFs) -> Result<T>,
+    key: String,
+    timeout_code: &'static str,
+    action: impl FnOnce(&WorkspaceFs) -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    let guard = state
-        .0
-        .lock()
-        .map_err(|_| WorkspaceError::new("state", "Workspace state lock was poisoned"))?;
-    let workspace = guard
-        .as_ref()
-        .ok_or_else(|| WorkspaceError::new("state", "Open a workspace first"))?;
-    if workspace.fs.root.to_string_lossy() != root {
-        return Err(WorkspaceError::new(
-            "state",
-            "Workspace changed; this operation belongs to the previous workspace",
-        ));
-    }
-    action(&workspace.fs)
+    let fs = {
+        let guard = state
+            .0
+            .lock()
+            .map_err(|_| WorkspaceError::new("state", "Workspace state lock was poisoned"))?;
+        let workspace = guard
+            .as_ref()
+            .ok_or_else(|| WorkspaceError::new("state", "Open a workspace first"))?;
+        if workspace.fs.root.to_string_lossy() != root {
+            return Err(WorkspaceError::new(
+                "state",
+                "Workspace changed; this operation belongs to the previous workspace",
+            ));
+        }
+        workspace.fs.clone()
+    };
+    bounded_io(key, timeout_code, move || action(&fs)).await
 }
 
 #[tauri::command(async)]
-fn open_workspace(
+async fn open_workspace(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<String> {
-    let fs = WorkspaceFs::open(Path::new(&path))?;
-    let root = fs.root.to_string_lossy().into_owned();
-    let event_root = root.clone();
-    let watcher = WorkspaceWatcher::new(&fs.root, move |event: notify::Result<notify::Event>| {
-        let error = match event {
-            Ok(event) => {
-                if event.kind.is_access()
-                    || event.paths.iter().all(|path| {
-                        path.file_name()
-                            .is_some_and(|name| name.to_string_lossy().starts_with('.'))
-                    })
-                {
-                    return;
+    let key = format!("open\0{path}");
+    let (fs, watcher) = bounded_io(key, "unavailable", move || {
+        let fs = WorkspaceFs::open(Path::new(&path))?;
+        let event_root = fs.root.to_string_lossy().into_owned();
+        let watcher =
+            WorkspaceWatcher::new(&fs.root, move |event: notify::Result<notify::Event>| {
+                let error = match event {
+                    Ok(event) => {
+                        if event.kind.is_access()
+                            || event.paths.iter().all(|path| {
+                                path.file_name()
+                                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                            })
+                        {
+                            return;
+                        }
+                        None
+                    }
+                    Err(error) => Some(format!("Workspace watcher failed: {error}")),
+                };
+                if let Err(error) = app.emit(
+                    "workspace-changed",
+                    WorkspaceEvent {
+                        root: event_root.clone(),
+                        error,
+                    },
+                ) {
+                    eprintln!("Cannot deliver workspace change: {error}");
                 }
-                None
-            }
-            Err(error) => Some(format!("Workspace watcher failed: {error}")),
-        };
-        if let Err(error) = app.emit(
-            "workspace-changed",
-            WorkspaceEvent {
-                root: event_root.clone(),
-                error,
-            },
-        ) {
-            eprintln!("Cannot deliver workspace change: {error}");
-        }
+            })
+            .map_err(|e| WorkspaceError::new("watch", format!("Cannot start file watcher: {e}")))?;
+        Ok((fs, watcher))
     })
-    .map_err(|e| WorkspaceError::new("watch", format!("Cannot start file watcher: {e}")))?;
+    .await?;
+    let root = fs.root.to_string_lossy().into_owned();
     *state
         .0
         .lock()
         .map_err(|_| WorkspaceError::new("state", "Workspace state lock was poisoned"))? =
         Some(Workspace {
-            fs,
+            fs: Arc::new(fs),
             _watcher: watcher,
         });
     Ok(root)
 }
 
 #[tauri::command(async)]
-fn list_entries(state: tauri::State<AppState>, root: String) -> Result<Vec<Entry>> {
-    with_workspace(&state, &root, |fs| fs.tree())
+async fn list_entries(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    path: Option<String>,
+) -> Result<Vec<Entry>> {
+    let key = format!("tree\0{root}\0{}", path.as_deref().unwrap_or(""));
+    with_workspace(&state, &root, key, "unavailable", move |fs| {
+        fs.list_at(path.as_deref())
+    })
+    .await
 }
 
 #[tauri::command(async)]
-fn read_document(state: tauri::State<AppState>, root: String, path: String) -> Result<Snapshot> {
-    with_workspace(&state, &root, |fs| fs.read(&path))
+async fn read_document(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    path: String,
+) -> Result<Snapshot> {
+    let key = format!("read\0{root}\0{path}");
+    with_workspace(&state, &root, key, "unavailable", move |fs| fs.read(&path)).await
 }
 
 #[tauri::command(async)]
-fn save_document(
-    state: tauri::State<AppState>,
+async fn save_document(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    recovery: tauri::State<'_, RecoveryStore>,
     root: String,
     path: String,
     content: String,
     expected_hash: Option<String>,
 ) -> Result<Snapshot> {
-    with_workspace(&state, &root, |fs| {
-        fs.save(&path, &content, expected_hash.as_deref())
+    let directory = recovery_directory(&app)?;
+    let store = recovery.inner().clone();
+    let checked_root = root.clone();
+    let key = format!("save\0{root}\0{path}");
+    with_workspace(&state, &root, key, "uncertain", move |fs| {
+        store.save(
+            &directory,
+            fs,
+            &checked_root,
+            &path,
+            &content,
+            expected_hash.as_deref(),
+        )
     })
+    .await
 }
 
 #[tauri::command(async)]
-fn create_folder(state: tauri::State<AppState>, root: String, path: String) -> Result<()> {
-    with_workspace(&state, &root, |fs| fs.create_folder(&path))
+async fn create_folder(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    path: String,
+) -> Result<()> {
+    let key = format!("create\0{root}\0{path}");
+    with_workspace(&state, &root, key, "uncertain", move |fs| {
+        fs.create_folder(&path)
+    })
+    .await
 }
 
 #[tauri::command(async)]
-fn move_entry(state: tauri::State<AppState>, root: String, from: String, to: String) -> Result<()> {
-    with_workspace(&state, &root, |fs| fs.move_entry(&from, &to))
+async fn move_entry(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    recovery: tauri::State<'_, RecoveryStore>,
+    root: String,
+    from: String,
+    to: String,
+) -> Result<()> {
+    let directory = recovery_directory(&app)?;
+    let store = recovery.inner().clone();
+    let checked_root = root.clone();
+    let key = format!("move\0{root}\0{from}");
+    with_workspace(&state, &root, key, "uncertain", move |fs| {
+        fs.move_entry(&from, &to)?;
+        store
+            .moved(&directory, &checked_root, &from, &to)
+            .map_err(|error| {
+                WorkspaceError::new(
+                    "recovery_move",
+                    format!(
+                        "Entry moved, but local recovery did not follow: {}",
+                        error.message
+                    ),
+                )
+            })
+    })
+    .await
 }
 
 #[tauri::command(async)]
-fn trash_entry(state: tauri::State<AppState>, root: String, path: String) -> Result<()> {
-    with_workspace(&state, &root, |fs| fs.trash_entry(&path))
+async fn trash_entry(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    recovery: tauri::State<'_, RecoveryStore>,
+    root: String,
+    path: String,
+) -> Result<()> {
+    let directory = recovery_directory(&app)?;
+    let store = recovery.inner().clone();
+    let checked_root = root.clone();
+    let key = format!("trash\0{root}\0{path}");
+    with_workspace(&state, &root, key, "uncertain", move |fs| {
+        fs.trash_entry(&path)?;
+        store
+            .trashed(&directory, &checked_root, &path)
+            .map_err(|error| {
+                WorkspaceError::new(
+                    "recovery_trash",
+                    format!(
+                        "Entry moved to Trash, but local recovery cleanup failed: {}",
+                        error.message
+                    ),
+                )
+            })
+    })
+    .await
 }
 
 #[tauri::command(async)]
-fn reveal_entry(state: tauri::State<AppState>, root: String, path: Option<String>) -> Result<()> {
-    with_workspace(&state, &root, |fs| {
+async fn reveal_entry(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    path: Option<String>,
+) -> Result<()> {
+    let key = format!("reveal\0{root}\0{}", path.as_deref().unwrap_or(""));
+    with_workspace(&state, &root, key, "unavailable", move |fs| {
         let target = match path {
             Some(path) => fs.resolve(&path, false)?,
             None => fs.root.clone(),
@@ -157,6 +396,55 @@ fn reveal_entry(state: tauri::State<AppState>, root: String, path: Option<String
         }
         Ok(())
     })
+    .await
+}
+
+fn recovery_directory(app: &tauri::AppHandle) -> Result<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("recovery"))
+        .map_err(|e| WorkspaceError::new("recovery", format!("Cannot locate local recovery: {e}")))
+}
+
+#[tauri::command(async)]
+fn read_recovery(
+    app: tauri::AppHandle,
+    store: tauri::State<RecoveryStore>,
+    root: String,
+    path: String,
+) -> Result<RecoveryRecord> {
+    store.read(&recovery_directory(&app)?, &root, &path)
+}
+
+#[tauri::command(async)]
+fn checkpoint_document(
+    app: tauri::AppHandle,
+    store: tauri::State<RecoveryStore>,
+    root: String,
+    path: String,
+    content: String,
+    base_hash: Option<String>,
+) -> Result<String> {
+    store.checkpoint(
+        &recovery_directory(&app)?,
+        &root,
+        &path,
+        &content,
+        base_hash,
+    )
+}
+
+#[tauri::command(async)]
+fn accept_external(
+    app: tauri::AppHandle,
+    store: tauri::State<RecoveryStore>,
+    root: String,
+    path: String,
+) -> Result<()> {
+    if save_pending(&root, &path)? {
+        return Err(WorkspaceError::new("busy", "A previous save is still waiting for the cloud service. Retry the version choice after it finishes."));
+    }
+    store.accept_external(&recovery_directory(&app)?, &root, &path)
 }
 
 fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf> {
@@ -219,12 +507,16 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(RecoveryStore::default())
         .manage(embeds::EmbedServer::start().expect("Cannot start YouTube player listener"))
         .invoke_handler(tauri::generate_handler![
             open_workspace,
             list_entries,
             read_document,
             save_document,
+            read_recovery,
+            checkpoint_document,
+            accept_external,
             create_folder,
             move_entry,
             trash_entry,

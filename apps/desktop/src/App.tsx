@@ -29,6 +29,7 @@ import { Canvas } from "./Canvas";
 import { Documents } from "./documents";
 import {
   errorMessage,
+  hasCode,
   NativeFs,
   type FileEntry,
   type Preferences,
@@ -42,12 +43,30 @@ const parent = (path: string): string =>
   path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 const join = (folder: string, name: string): string =>
   folder ? `${folder}/${name}` : name;
+const mergeListing = (previous: FileEntry[], listed: FileEntry[]): FileEntry[] => {
+  const old = new Map(previous.map((entry) => [entry.path, entry]));
+  return listed.map((entry) => ({
+    ...entry,
+    children: entry.kind === "folder" ? old.get(entry.path)?.children ?? [] : [],
+  }));
+};
+const replaceFolder = (entries: FileEntry[], path: string, listed: FileEntry[]): FileEntry[] =>
+  entries.map((entry) => entry.path === path
+    ? { ...entry, children: mergeListing(entry.children, listed) }
+    : { ...entry, children: replaceFolder(entry.children, path, listed) });
 
 /** Desktop workspace shell with file-backed tabs and explicit conflict resolution. */
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [folderLoading, setFolderLoading] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set());
+  const [folderErrors, setFolderErrors] = useState<Record<string, string>>({});
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
+  const [openingError, setOpeningError] = useState<{ path: string; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<PromptOptions | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,6 +87,10 @@ export function App() {
   const apis = useRef(new Map<string, ExcalidrawImperativeAPI>());
   const savingPreferences = useRef(Promise.resolve());
   const treeRequest = useRef(0);
+  const treePending = useRef<{ target: Session; promise: Promise<void> } | null>(null);
+  const folderPending = useRef(new Map<string, { target: Session; promise: Promise<void> }>());
+  const expandedRef = useRef(expandedFolders);
+  expandedRef.current = expandedFolders;
   const emptyDocuments = useRef<ReturnType<Documents["getSnapshot"]>>([]);
   const documents = useSyncExternalStore(
     session?.documents.subscribe ?? (() => () => {}),
@@ -78,11 +101,69 @@ export function App() {
   const run = useCallback((action: () => Promise<unknown>) => {
     void action().catch((reason) => setError(errorMessage(reason)));
   }, []);
-  const refresh = useCallback(async (target: Session) => {
+  const refresh = useCallback((target: Session): Promise<void> => {
+    if (treePending.current?.target === target) return treePending.current.promise;
     const request = ++treeRequest.current;
-    const tree = await target.fs.tree();
-    if (currentSession.current === target && treeRequest.current === request)
-      setEntries(tree);
+    const operation = (async () => {
+      if (currentSession.current === target) setFolderLoading(true);
+      try {
+        const tree = await target.fs.tree();
+        if (currentSession.current === target && treeRequest.current === request) {
+          setEntries((previous) => mergeListing(previous, tree));
+          setFolderError(null);
+        }
+      } catch (reason) {
+        if (currentSession.current === target && treeRequest.current === request)
+          setFolderError(errorMessage(reason));
+        throw reason;
+      } finally {
+        if (currentSession.current === target && treeRequest.current === request)
+          setFolderLoading(false);
+      }
+    })();
+    treePending.current = { target, promise: operation };
+    const clear = () => {
+      if (treePending.current?.promise === operation) treePending.current = null;
+    };
+    void operation.then(clear, clear);
+    return operation;
+  }, []);
+  const loadFolder = useCallback((target: Session, path: string): Promise<void> => {
+    const existing = folderPending.current.get(path);
+    if (existing?.target === target) return existing.promise;
+    const operation = (async () => {
+      if (currentSession.current === target)
+        setLoadingFolders((previous) => new Set(previous).add(path));
+      try {
+        const listed = await target.fs.tree(path);
+        if (currentSession.current === target) {
+          setEntries((previous) => replaceFolder(previous, path, listed));
+          setFolderErrors((previous) => {
+            const next = { ...previous };
+            delete next[path];
+            return next;
+          });
+        }
+      } catch (reason) {
+        if (currentSession.current === target)
+          setFolderErrors((previous) => ({ ...previous, [path]: errorMessage(reason) }));
+        throw reason;
+      } finally {
+        if (currentSession.current === target)
+          setLoadingFolders((previous) => {
+            const next = new Set(previous);
+            next.delete(path);
+            return next;
+          });
+      }
+    })();
+    folderPending.current.set(path, { target, promise: operation });
+    const clear = () => {
+      if (folderPending.current.get(path)?.promise === operation)
+        folderPending.current.delete(path);
+    };
+    void operation.then(clear, clear);
+    return operation;
   }, []);
 
   const openWorkspace = useCallback(
@@ -104,20 +185,29 @@ export function App() {
         setSession(next);
         setActive(null);
         setEntries([]);
+        setExpandedFolders(new Set());
+        setLoadingFolders(new Set());
+        setFolderErrors({});
         setError(null);
-        await refresh(next);
+        const restoredPath = selected && tabs.includes(selected) ? selected : tabs[0] ?? null;
+        setActive(restoredPath);
+        setOpeningPath(restoredPath);
+        setOpeningError(null);
+        void refresh(next).catch((reason) => setError(errorMessage(reason)));
         for (const tab of tabs) {
-          try {
-            await next.documents.open(tab);
-          } catch (reason) {
-            setError(`Could not reopen ${tab}: ${errorMessage(reason)}`);
-          }
+          void next.documents.open(tab)
+            .catch((reason) => {
+              if (currentSession.current === next) {
+                const message = errorMessage(reason);
+                if (tab === restoredPath) setOpeningError({ path: tab, message });
+                setError(`Could not reopen ${tab}: ${message}`);
+              }
+            })
+            .finally(() => {
+              if (tab === restoredPath)
+                setOpeningPath((path) => path === tab ? null : path);
+            });
         }
-        setActive(
-          next.documents.get(selected ?? "")?.path ??
-            next.documents.getSnapshot()[0]?.path ??
-            null,
-        );
       } finally {
         setBusy(false);
       }
@@ -186,19 +276,23 @@ export function App() {
     let stopped = false;
     let unlisten: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const reconcileOpen = async () => {
+      for (const doc of session.documents.getSnapshot())
+        void session.documents.reconcile(doc.path).catch((reason) => setError(errorMessage(reason)));
+    };
     const synchronize = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
         if (stopped) return;
         run(async () => {
+          for (const path of expandedRef.current)
+            void loadFolder(session, path).catch((reason) => setError(errorMessage(reason)));
           await Promise.all([
             refresh(session),
-            ...session.documents
-              .getSnapshot()
-              .map((doc) => session.documents.reconcile(doc.path)),
+            reconcileOpen(),
           ]);
         });
-      }, 120);
+      }, 1000);
     };
     void session.fs
       .watch((watchError) => {
@@ -214,13 +308,21 @@ export function App() {
       })
       .catch((reason) => setError(errorMessage(reason)));
     window.addEventListener("focus", synchronize);
+    const filePoll = setInterval(() => run(reconcileOpen), 10_000);
+    const folderPoll = setInterval(() => {
+      run(() => refresh(session));
+      for (const path of expandedRef.current)
+        run(() => loadFolder(session, path));
+    }, 30_000);
     return () => {
       stopped = true;
       clearTimeout(timer);
       unlisten?.();
+      clearInterval(filePoll);
+      clearInterval(folderPoll);
       window.removeEventListener("focus", synchronize);
     };
-  }, [session, refresh, run]);
+  }, [session, refresh, loadFolder, run]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -284,8 +386,17 @@ export function App() {
       });
       return;
     }
-    await session.documents.open(entry.path);
     setActive(entry.path);
+    setOpeningPath(entry.path);
+    setOpeningError(null);
+    try {
+      await session.documents.open(entry.path);
+    } catch (reason) {
+      setOpeningError({ path: entry.path, message: errorMessage(reason) });
+      throw reason;
+    } finally {
+      setOpeningPath((path) => path === entry.path ? null : path);
+    }
   };
 
   const newEntry = (kind: "drawing" | "folder", folder = "") => {
@@ -342,11 +453,19 @@ export function App() {
         const destination = rename ? join(parent(entry.path), value) : value;
         if (entry.path === destination) return;
         await session.documents.flush();
-        await session.fs.move(entry.path, destination);
+        let warning: string | null = null;
+        try {
+          await session.fs.move(entry.path, destination);
+        } catch (reason) {
+          if (!hasCode(reason, "recovery_move")) throw reason;
+          warning = errorMessage(reason);
+        }
         session.documents.moved(entry.path, destination);
+        setExpandedFolders((previous) => new Set([...previous].filter((path) => path !== entry.path && !path.startsWith(`${entry.path}/`))));
         if (active === entry.path || active?.startsWith(`${entry.path}/`))
           setActive(destination + active.slice(entry.path.length));
         await refresh(session);
+        if (warning) setError(warning);
       },
     });
   };
@@ -364,11 +483,19 @@ export function App() {
       danger: true,
       action: async () => {
         await session.documents.flush();
-        await session.fs.trash(entry.path);
+        let warning: string | null = null;
+        try {
+          await session.fs.trash(entry.path);
+        } catch (reason) {
+          if (!hasCode(reason, "recovery_trash")) throw reason;
+          warning = errorMessage(reason);
+        }
         session.documents.trashed(entry.path);
+        setExpandedFolders((previous) => new Set([...previous].filter((path) => path !== entry.path && !path.startsWith(`${entry.path}/`))));
         if (active === entry.path || active?.startsWith(`${entry.path}/`))
           setActive(session.documents.getSnapshot()[0]?.path ?? null);
         await refresh(session);
+        if (warning) setError(warning);
       },
     });
   };
@@ -419,8 +546,17 @@ export function App() {
     }
     if (target) {
       const path = selected.slice(target.fs.root.length + 1);
-      await target.documents.open(path);
       setActive(path);
+      setOpeningPath(path);
+      setOpeningError(null);
+      try {
+        await target.documents.open(path);
+      } catch (reason) {
+        setOpeningError({ path, message: errorMessage(reason) });
+        throw reason;
+      } finally {
+        setOpeningPath((opening) => opening === path ? null : opening);
+      }
     }
     setWorkspaceMenu(false);
   };
@@ -446,17 +582,19 @@ export function App() {
 
   const status = !document
     ? ""
-    : document.conflict
-      ? "Conflict needs attention"
+    : document.error
+      ? "Save or recovery failed"
+      : document.conflict
+      ? "Version choice needed"
+      : document.waiting
+        ? "Waiting for folder…"
       : document.saving
         ? "Saving…"
-        : document.error
-          ? "Save failed"
-          : document.dirty
+        : document.dirty
             ? "Unsaved changes"
             : document.external
-              ? "Updated externally"
-              : "All changes saved";
+              ? "Updated from folder"
+              : "Saved locally";
   return (
     <div className="app-shell" data-theme={theme}>
       <header className="workspace-toolbar">
@@ -566,6 +704,8 @@ export function App() {
                     if (session)
                       run(async () => {
                         await refresh(session);
+                        for (const path of expandedRef.current)
+                          void loadFolder(session, path).catch((reason) => setError(errorMessage(reason)));
                         await Promise.all(
                           documents.map((doc) =>
                             session.documents.reconcile(doc.path),
@@ -585,18 +725,33 @@ export function App() {
                   active={active}
                   onOpen={(entry) => run(() => openFile(entry))}
                   onAction={(entry, x, y) => setMenu({ entry, x, y })}
+                  expandedFolders={expandedFolders}
+                  loadingFolders={loadingFolders}
+                  folderErrors={folderErrors}
+                  onToggle={(entry) => {
+                    const opening = !expandedFolders.has(entry.path);
+                    setExpandedFolders((previous) => {
+                      const next = new Set(previous);
+                      if (opening) next.add(entry.path);
+                      else next.delete(entry.path);
+                      return next;
+                    });
+                    if (opening && session) run(() => loadFolder(session, entry.path));
+                  }}
+                  onRetry={(entry) => {
+                    if (session) run(() => loadFolder(session, entry.path));
+                  }}
                 />
               ) : (
                 <div className="sidebar-empty">
                   {session ? (
                     <>
-                      <p>No drawings yet.</p>
-                      <button
-                        className="text-button"
-                        onClick={() => newEntry("drawing")}
-                      >
-                        Create a drawing
-                      </button>
+                      <p>{folderLoading ? "Waiting for folder contents…" : folderError ? `Folder unavailable: ${folderError}` : "No drawings yet."}</p>
+                      {folderError ? (
+                        <button className="text-button" onClick={() => run(() => refresh(session))}>Retry folder</button>
+                      ) : !folderLoading ? (
+                        <button className="text-button" onClick={() => newEntry("drawing")}>Create a drawing</button>
+                      ) : null}
                     </>
                   ) : (
                     <p>Open a folder to see your drawings.</p>
@@ -652,8 +807,10 @@ export function App() {
           {document?.conflict && (
             <section className="conflict-bar" aria-label="File conflict">
               <div>
-                <strong>External change in {basename(document.path)}</strong>
+                <strong>Choose a version of {basename(document.path)}</strong>
                 <p>{document.conflict.message}</p>
+                {document.conflict.copyPath && <p>Local copy: {document.conflict.copyPath}</p>}
+                {document.error && <p className="form-error">{document.error}</p>}
               </div>
               <div className="conflict-actions">
                 <button
@@ -663,16 +820,48 @@ export function App() {
                       run(() => session.documents.reload(document.path));
                   }}
                 >
-                  Reload external
+                  Use incoming
                 </button>
                 <button
-                  disabled={document.saving}
+                  disabled={!document.conflict.disk || document.saving}
                   onClick={() => {
                     if (session)
                       run(() => session.documents.keep(document.path));
                   }}
                 >
-                  Keep my version
+                  Make mine primary
+                </button>
+                <button
+                  disabled={!document.conflict.disk || document.saving}
+                  onClick={() => {
+                    if (session) run(async () => {
+                      const destination = await session.documents.openIncoming(document.path);
+                      setActive(destination);
+                      await refresh(session);
+                    });
+                  }}
+                >
+                  Open incoming
+                </button>
+                <button
+                  disabled={!document.conflict.disk || document.saving}
+                  onClick={() => {
+                    if (session) run(async () => {
+                      const destination = await session.documents.keepBoth(document.path);
+                      setActive(destination);
+                      await refresh(session);
+                    });
+                  }}
+                >
+                  Keep both
+                </button>
+                <button
+                  disabled={document.saving}
+                  onClick={() => {
+                    if (session) run(() => session.documents.reconcile(document.path));
+                  }}
+                >
+                  Retry read
                 </button>
                 <button disabled={document.saving} onClick={saveCopy}>
                   Save mine as…
@@ -697,20 +886,30 @@ export function App() {
                 <div className="empty-content">
                   <FolderOpen size={34} strokeWidth={1.3} />
                   <h1>
-                    {starting
+                    {active !== null && openingPath === active
+                      ? "Waiting for drawing…"
+                      : openingError?.path === active
+                      ? "Drawing unavailable"
+                      : starting
                       ? "Opening workspace…"
                       : session
                         ? "A place for your drawings"
                         : "Your drawings, in your folders"}
                   </h1>
                   <p>
-                    {session
+                    {active !== null && openingPath === active
+                      ? "The cloud service may be downloading this file. You can keep using the rest of the app."
+                      : openingError?.path === active
+                      ? openingError.message
+                      : session
                       ? "Open a drawing from the sidebar, or start a new one."
                       : "Choose a folder on your Mac. Drawings stay as ordinary .excalidraw files, ready for any compatible editor."}
                   </p>
-                  <button
+                  {openingError?.path === active && session && active ? (
+                    <button className="primary-button" onClick={() => run(() => openFile({ name: basename(active), path: active, kind: "drawing", children: [] }))}>Retry opening</button>
+                  ) : <button
                     className="primary-button"
-                    disabled={starting || busy || !isTauri()}
+                    disabled={starting || busy || !isTauri() || (active !== null && openingPath === active)}
                     onClick={() =>
                       session ? newEntry("drawing") : run(chooseWorkspace)
                     }
@@ -722,7 +921,7 @@ export function App() {
                     )}
                     {session ? "New drawing" : "Open workspace"}
                     <kbd>{session ? "⌘N" : "⌘O"}</kbd>
-                  </button>
+                  </button>}
                   {!isTauri() && (
                     <p className="browser-note">
                       This is the browser preview. Run{" "}

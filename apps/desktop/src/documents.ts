@@ -15,11 +15,12 @@ export interface OpenDocument {
   modifiedAt: number;
   dirty: boolean;
   saving: boolean;
+  waiting: boolean;
   initialized: boolean;
   revision: number;
   external: boolean;
   error: string | null;
-  conflict: { disk: DiskSnapshot | null; message: string } | null;
+  conflict: { disk: DiskSnapshot | null; message: string; copyPath?: string } | null;
 }
 
 /** Owns autosave and disk reconciliation independently of React or the editor. */
@@ -30,6 +31,8 @@ export class Documents {
   private pending = new Map<string, Promise<void>>();
   private opening = new Map<string, Promise<void>>();
   private reads = new Map<string, number>();
+  private reconciling = new Map<string, Promise<void>>();
+  private checkpoints = new Map<string, Promise<string>>();
   private disposed = false;
 
   constructor(
@@ -92,6 +95,7 @@ export class Documents {
       modifiedAt: disk.modifiedAt,
       dirty: false,
       saving: false,
+      waiting: false,
       initialized: false,
       revision,
       external,
@@ -100,16 +104,104 @@ export class Documents {
     };
   }
 
+  private checkpoint(path: string, content: string, baseHash: string): Promise<string> {
+    const previous = this.checkpoints.get(path);
+    const next = (previous ?? Promise.resolve(""))
+      .catch((error) => {
+        this.onError(`Previous local recovery failed: ${errorMessage(error)}`);
+      })
+      .then(() => this.fs.checkpoint(path, content, baseHash));
+    this.checkpoints.set(path, next);
+    const cleanup = () => {
+      if (this.checkpoints.get(path) === next) this.checkpoints.delete(path);
+    };
+    void next.then(cleanup, cleanup);
+    return next;
+  }
+
+  private versionPath(path: string, kind: "local" | "incoming", hash: string): string {
+    const slash = path.lastIndexOf("/");
+    const directory = slash < 0 ? "" : path.slice(0, slash + 1);
+    const stem = Array.from(path.slice(slash + 1).replace(/\.excalidraw$/, ""));
+    const suffix = `-${kind}-${hash.slice(0, 16)}.excalidraw`;
+    const encoder = new TextEncoder();
+    while (stem.length && encoder.encode(`${stem.join("")}${suffix}`).length > 255)
+      stem.pop();
+    return `${directory}${stem.join("") || "version"}${suffix}`;
+  }
+
+  private async createVersion(path: string, kind: "local" | "incoming", content: string, hash: string): Promise<string> {
+    const destination = this.versionPath(path, kind, hash);
+    try {
+      await this.fs.save(destination, content, null);
+    } catch (error) {
+      if (!hasCode(error, "conflict")) throw error;
+      const existing = await this.fs.read(destination);
+      if (existing.content !== content) throw error;
+    }
+    return destination;
+  }
+
   /** Read once even if a user opens the same file several times concurrently. */
   async open(path: string): Promise<void> {
     if (this.get(path)) return;
     const existing = this.opening.get(path);
     if (existing) return existing;
     const operation = (async () => {
-      const disk = await this.fs.read(path);
+      const recovery = await this.fs.recovery(path);
+      let disk: DiskSnapshot | null = null;
+      let readError: unknown;
+      try {
+        disk = await this.fs.read(path);
+      } catch (error) {
+        readError = error;
+      }
+      if (!disk && !recovery.pending && !recovery.written) throw readError;
       if (!this.disposed && !this.get(path)) {
-        this.documents = [...this.documents, this.loaded(path, disk)];
+        let doc: OpenDocument;
+        if (recovery.pending) {
+          const pending = recovery.pending;
+          const fallback: DiskSnapshot = disk ?? {
+            content: pending.content,
+            hash: pending.baseHash ?? pending.hash,
+            modifiedAt: 0,
+          };
+          doc = this.loaded(path, fallback);
+          if (!disk || disk.hash !== pending.hash) {
+            doc = {
+              ...doc,
+              content: pending.content,
+              dirty: true,
+              conflict: {
+                disk,
+                message: disk
+                  ? "Recovered local changes differ from the workspace file. Choose a version."
+                  : `Recovered local changes. The workspace file is unavailable: ${errorMessage(readError)}`,
+              },
+            };
+          }
+        } else if (recovery.written && (!disk || recovery.written.hash !== disk.hash)) {
+          doc = this.loaded(path, {
+            content: recovery.written.content,
+            hash: recovery.written.hash,
+            modifiedAt: disk?.modifiedAt ?? 0,
+          });
+          doc.conflict = {
+            disk,
+            message: disk
+              ? "The workspace file differs from the last version saved here. Choose a version."
+              : `The last locally saved version is available. The workspace file is unavailable: ${errorMessage(readError)}`,
+          };
+        } else if (disk) {
+          doc = this.loaded(path, disk);
+        } else {
+          throw readError;
+        }
+        this.documents = [...this.documents, doc];
         this.emit();
+        if (doc.dirty && disk && disk.hash !== recovery.pending?.baseHash) {
+          await this.captureConflict(path);
+        }
       }
     })();
     this.opening.set(path, operation);
@@ -134,6 +226,11 @@ export class Documents {
       canonical(JSON.parse(doc.savedContent)) !==
       canonical(JSON.parse(content));
     this.patch(path, { content, dirty, external: false, error: null });
+    if (doc.conflict) {
+      void this.checkpoint(path, content, doc.savedHash).catch((error) =>
+        this.patch(path, { error: `Local recovery failed: ${errorMessage(error)}` }),
+      );
+    }
     this.schedule(path);
   }
 
@@ -152,9 +249,14 @@ export class Documents {
     const content = doc.content;
     const expected =
       expectedOverride === undefined ? doc.savedHash : expectedOverride;
-    this.patch(path, { saving: true, error: null });
+    this.patch(path, { saving: true, waiting: false, error: null });
+    const waitingTimer = setTimeout(() => {
+      if (this.get(path)?.saving) this.patch(path, { waiting: true });
+    }, 2000);
     const operation = (async () => {
       try {
+        const checkpoint = this.checkpoints.get(path);
+        if (checkpoint) await checkpoint;
         const disk = await this.fs.save(path, content, expected);
         const current = this.get(path);
         if (current)
@@ -174,7 +276,8 @@ export class Documents {
         }
         throw error;
       } finally {
-        this.patch(path, { saving: false });
+        clearTimeout(waitingTimer);
+        this.patch(path, { saving: false, waiting: false });
       }
     })();
     this.pending.set(path, operation);
@@ -186,29 +289,64 @@ export class Documents {
     }
   }
 
-  private async captureConflict(path: string): Promise<void> {
+  private async captureConflict(path: string, knownDisk?: DiskSnapshot): Promise<void> {
     this.clearTimer(path);
+    const current = this.get(path);
+    if (!current) return;
+    this.patch(path, {
+      conflict: {
+        disk: knownDisk ?? current.conflict?.disk ?? null,
+        copyPath: current.conflict?.copyPath,
+        message: "Checking the workspace version. Your canvas is preserved.",
+      },
+    });
+    let checkpointHash: string | null = null;
     try {
-      const disk = await this.fs.read(path);
+      checkpointHash = await this.checkpoint(path, current.content, current.savedHash);
+    } catch (error) {
+      this.patch(path, { error: `Local recovery failed: ${errorMessage(error)}` });
+    }
+    try {
+      const disk = knownDisk ?? await this.fs.read(path);
+      let copyPath = current.conflict?.copyPath;
+      if (current.dirty && disk.hash !== current.savedHash && checkpointHash && !copyPath) {
+        try {
+          copyPath = await this.createVersion(path, "local", current.content, checkpointHash);
+        } catch (error) {
+          this.patch(path, { error: `Could not create local version: ${errorMessage(error)}` });
+        }
+      }
       this.patch(path, {
         conflict: {
           disk,
-          message:
-            "This drawing changed outside the app. Your canvas has been preserved.",
+          copyPath,
+          message: "The workspace file changed. Your canvas and local recovery are preserved.",
         },
       });
     } catch (error) {
       this.patch(path, {
         conflict: {
           disk: null,
-          message: `The disk version is unavailable: ${errorMessage(error)}`,
+          message: `The workspace file is unavailable. Retry when it finishes downloading: ${errorMessage(error)}`,
         },
       });
     }
   }
 
   /** Recheck current state after each await, so an external read cannot erase a new edit. */
-  async reconcile(path: string): Promise<void> {
+  reconcile(path: string): Promise<void> {
+    const existing = this.reconciling.get(path);
+    if (existing) return existing;
+    const operation = this.reconcileOnce(path);
+    this.reconciling.set(path, operation);
+    const clear = () => {
+      if (this.reconciling.get(path) === operation) this.reconciling.delete(path);
+    };
+    void operation.then(clear, clear);
+    return operation;
+  }
+
+  private async reconcileOnce(path: string): Promise<void> {
     const pending = this.pending.get(path);
     if (pending) {
       await pending.catch((error) => this.onError(errorMessage(error)));
@@ -222,25 +360,44 @@ export class Documents {
       if (this.reads.get(path) !== ticket) return;
       const current = this.get(path);
       if (!current) return;
-      if (this.pending.has(path) || current.savedHash !== baseline)
-        return this.reconcile(path);
+      if (this.pending.has(path) || current.savedHash !== baseline) return;
+      if (current.dirty && disk.content === current.content) {
+        this.patch(path, {
+          savedHash: disk.hash,
+          savedContent: disk.content,
+          modifiedAt: disk.modifiedAt,
+          dirty: false,
+          conflict: null,
+          error: null,
+        });
+        return;
+      }
       if (disk.hash === current.savedHash) {
-        if (current.conflict) this.patch(path, { conflict: null });
+        if (current.conflict && !current.dirty) this.patch(path, { conflict: null });
         this.schedule(path);
         return;
       }
       if (current.dirty || current.conflict) {
-        this.clearTimer(path);
-        this.patch(path, {
-          conflict: {
-            disk,
-            message:
-              "This drawing changed outside the app. Your canvas has been preserved.",
-          },
-        });
+        await this.captureConflict(path, disk);
       } else {
         try {
-          this.replace(path, disk, true);
+          const recovery = await this.fs.recovery(path);
+          const latest = this.get(path);
+          if (this.reads.get(path) !== ticket || !latest) return;
+          if (latest.savedHash !== baseline) return;
+          if (latest.content !== current.content)
+            return this.captureConflict(path, disk);
+          if (latest.dirty) return this.captureConflict(path, disk);
+          if (recovery.written?.hash === current.savedHash || recovery.pending?.hash === current.savedHash) {
+            this.patch(path, {
+              conflict: {
+                disk,
+                message: "The workspace file differs from the last version saved here. Choose a version.",
+              },
+            });
+          } else {
+            this.replace(path, disk, true);
+          }
         } catch (error) {
           this.patch(path, {
             conflict: {
@@ -253,10 +410,18 @@ export class Documents {
     } catch (error) {
       if (this.reads.get(path) !== ticket || !this.get(path)) return;
       this.clearTimer(path);
+      const current = this.get(path);
+      if (current?.dirty) {
+        try {
+          await this.checkpoint(path, current.content, current.savedHash);
+        } catch (checkpointError) {
+          this.patch(path, { error: `Local recovery failed: ${errorMessage(checkpointError)}` });
+        }
+      }
       this.patch(path, {
         conflict: {
           disk: null,
-          message: `The disk version is unavailable: ${errorMessage(error)}`,
+          message: `The workspace file is unavailable. Retry when it finishes downloading: ${errorMessage(error)}`,
         },
       });
     }
@@ -277,17 +442,52 @@ export class Documents {
   async reload(path: string): Promise<void> {
     const before = this.get(path);
     const disk = await this.fs.read(path);
+    parseScene(disk.content);
     if (this.get(path)?.content !== before?.content)
       throw new Error(
         "The canvas changed while reloading. Review it before reloading again.",
       );
+    if (before?.conflict?.disk && before.conflict.disk.hash !== disk.hash)
+      throw new Error("The workspace file changed again. Review the new version first.");
+    if (before?.conflict) {
+      const localHash = await this.checkpoint(path, before.content, before.savedHash);
+      await this.createVersion(path, "local", before.content, localHash);
+    }
+    if (this.get(path)?.content !== before?.content)
+      throw new Error("The canvas changed while preserving its version. Review it before reloading again.");
+    await this.fs.acceptExternal(path);
+    if (this.get(path)?.content !== before?.content) {
+      const current = this.get(path);
+      if (current) await this.checkpoint(path, current.content, current.savedHash);
+      throw new Error("The canvas changed while accepting the external version. Your edit is preserved.");
+    }
     this.replace(path, disk, true);
   }
-  /** Overwrite only the external version displayed in the conflict prompt. */
+  /** Make the local canvas primary after preserving the incoming version. */
   async keep(path: string): Promise<void> {
     const doc = this.get(path);
     if (!doc?.conflict) return;
+    if (!doc.conflict.disk) throw new Error("Wait for the workspace file before replacing it.");
+    await this.createVersion(path, "incoming", doc.conflict.disk.content, doc.conflict.disk.hash);
     await this.save(path, doc.conflict.disk?.hash ?? null);
+  }
+  /** Open a create-only sibling of the incoming version without changing the canvas. */
+  async openIncoming(path: string): Promise<string> {
+    const disk = this.get(path)?.conflict?.disk;
+    if (!disk) throw new Error("The incoming version is unavailable.");
+    const destination = await this.createVersion(path, "incoming", disk.content, disk.hash);
+    await this.open(destination);
+    return destination;
+  }
+  /** Keep the local scene as a sibling and explicitly accept the incoming primary. */
+  async keepBoth(path: string): Promise<string> {
+    const doc = this.get(path);
+    if (!doc?.conflict?.disk) throw new Error("The incoming version is unavailable.");
+    const checkpointHash = await this.checkpoint(path, doc.content, doc.savedHash);
+    const destination = await this.createVersion(path, "local", doc.content, checkpointHash);
+    await this.reload(path);
+    await this.open(destination);
+    return destination;
   }
   /** Save the local buffer to a new file; keep later edits in the original tab. */
   async saveCopy(path: string, destination: string): Promise<void> {
@@ -295,7 +495,10 @@ export class Documents {
     if (!doc) return;
     await this.fs.save(destination, doc.content, null);
     await this.open(destination);
-    if (this.get(path)?.content === doc.content) this.remove(path);
+    if (this.get(path)?.content === doc.content) {
+      await this.fs.acceptExternal(path);
+      this.remove(path);
+    }
   }
   /** Save all tabs before a workspace switch or a normal application exit. */
   async flush(): Promise<void> {

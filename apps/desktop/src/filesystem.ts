@@ -8,6 +8,19 @@ export interface DiskSnapshot {
   hash: string;
   modifiedAt: number;
 }
+/** A durable local version outside the selected workspace. */
+export interface RecoveryVersion {
+  content: string;
+  hash: string;
+  baseHash: string | null;
+}
+/** The last app-written scene and an unresolved save attempt, if any. */
+export interface RecoveryRecord {
+  root: string;
+  path: string;
+  written: RecoveryVersion | null;
+  pending: RecoveryVersion | null;
+}
 /** Visible workspace entry. */
 export interface FileEntry {
   name: string;
@@ -29,6 +42,9 @@ export interface DocumentFs {
     content: string,
     expectedHash: string | null,
   ): Promise<DiskSnapshot>;
+  recovery(path: string): Promise<RecoveryRecord>;
+  checkpoint(path: string, content: string, baseHash: string | null): Promise<string>;
+  acceptExternal(path: string): Promise<void>;
 }
 
 /** Convert native structured errors into readable messages. */
@@ -62,8 +78,17 @@ export class NativeFs implements DocumentFs {
       expectedHash,
     });
   }
-  tree(): Promise<FileEntry[]> {
-    return invoke("list_entries", { root: this.root });
+  recovery(path: string): Promise<RecoveryRecord> {
+    return invoke("read_recovery", { root: this.root, path });
+  }
+  checkpoint(path: string, content: string, baseHash: string | null): Promise<string> {
+    return invoke("checkpoint_document", { root: this.root, path, content, baseHash });
+  }
+  acceptExternal(path: string): Promise<void> {
+    return invoke("accept_external", { root: this.root, path });
+  }
+  tree(path?: string): Promise<FileEntry[]> {
+    return invoke("list_entries", { root: this.root, path: path ?? null });
   }
   createFolder(path: string): Promise<void> {
     return invoke("create_folder", { root: this.root, path });
