@@ -14,12 +14,14 @@ export function Canvas({
   active,
   theme,
   register,
+  onError,
 }: {
   document: OpenDocument;
   documents: Documents;
   active: boolean;
   theme: "light" | "dark";
   register: (path: string, api: ExcalidrawImperativeAPI) => void;
+  onError: (message: string) => void;
 }) {
   // The parent remounts only when disk reconciliation replaces this scene.
   const scene = useMemo(() => parseScene(document.content), []);
@@ -48,6 +50,13 @@ export function Canvas({
           handleKeyboardGlobally={false}
           autoFocus={active}
           aiEnabled={false}
+          onLinkOpen={(element, event) => {
+            if (!isTauri() || !element.link) return;
+            event.preventDefault();
+            void invoke("open_external_link", { link: element.link }).catch((error: unknown) =>
+              onError(`Could not open link: ${errorMessage(error)}`),
+            );
+          }}
           validateEmbeddable={(link) => youtubePlayerPath(link) !== null}
           renderEmbeddable={(element) => {
             const path = youtubePlayerPath(element.link);

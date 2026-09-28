@@ -879,6 +879,7 @@ export function App() {
                   active={active === doc.path}
                   theme={theme}
                   register={(path, api) => apis.current.set(path, api)}
+                  onError={setError}
                 />
               ))}
             {!document && (

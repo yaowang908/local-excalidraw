@@ -157,6 +157,20 @@ mod io_tests {
     }
 }
 
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn external_links_accept_web_urls_only() {
+        assert!(external_link("https://example.com/path").is_ok());
+        assert!(external_link("http://localhost:3000/").is_ok());
+        assert!(external_link("file:///tmp/drawing").is_err());
+        assert!(external_link("javascript:alert(1)").is_err());
+        assert!(external_link("https://").is_err());
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Preferences {
@@ -502,6 +516,47 @@ fn youtube_embed_base(server: tauri::State<embeds::EmbedServer>) -> String {
     server.base.clone()
 }
 
+fn external_link(link: &str) -> Result<tauri::Url> {
+    let url = tauri::Url::parse(link)
+        .map_err(|error| WorkspaceError::new("link", format!("Invalid link: {error}")))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(WorkspaceError::new("link", "Only web links can be opened"));
+    }
+    Ok(url)
+}
+
+#[tauri::command(async)]
+async fn open_external_link(link: String) -> Result<()> {
+    let url = external_link(&link)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let mut command = std::process::Command::new("/usr/bin/open");
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut command = std::process::Command::new("rundll32.exe");
+            command.arg("url.dll,FileProtocolHandler");
+            command
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let mut command = std::process::Command::new("xdg-open");
+        let status = command.arg(url.as_str()).status().map_err(|error| {
+            WorkspaceError::new(
+                "link",
+                format!("Cannot launch the default browser: {error}"),
+            )
+        })?;
+        if !status.success() {
+            return Err(WorkspaceError::new(
+                "link",
+                format!("Default browser launcher exited with {status}"),
+            ));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| WorkspaceError::new("link", format!("Browser launch task failed: {error}")))?
+}
+
 /// Launch the local desktop workspace.
 pub fn run() {
     let app = tauri::Builder::default()
@@ -524,7 +579,8 @@ pub fn run() {
             load_preferences,
             save_preferences,
             exit_app,
-            youtube_embed_base
+            youtube_embed_base,
+            open_external_link
         ])
         .build(tauri::generate_context!())
         .expect("Cannot initialize Local Excalidraw");
