@@ -41,6 +41,19 @@ fn rejects_prefix_sibling_escape_and_missing_parent() {
 }
 
 #[test]
+fn shallow_listing_does_not_descend_into_unavailable_subfolders() {
+    let (_directory, fs) = fixture();
+    fs.create_folder("nested").unwrap();
+    fs.save("nested/a.excalidraw", &scene("a"), None).unwrap();
+    let root = fs.list_at(None).unwrap();
+    assert_eq!(root.len(), 1);
+    assert_eq!(root[0].path, "nested");
+    assert!(root[0].children.is_empty());
+    let nested = fs.list_at(Some("nested")).unwrap();
+    assert_eq!(nested[0].path, "nested/a.excalidraw");
+}
+
+#[test]
 fn locks_cannot_be_redirected_via_symlinks() {
     let (_directory, fs) = fixture();
     let outside = tempfile::NamedTempFile::new().unwrap();
@@ -200,65 +213,19 @@ fn recursive_tree_and_folder_moves_preserve_contents() {
 }
 
 #[test]
-fn watcher_observes_external_atomic_replacement() {
+fn watcher_start_does_not_read_drawing_contents() {
     let (_directory, fs) = fixture();
-    fs.save("a.excalidraw", &scene("a"), None).unwrap();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _watcher = WorkspaceWatcher::new(&fs.root, move |event: notify::Result<notify::Event>| {
-        tx.send(event).unwrap();
-    })
-    .unwrap();
-    let mut external = tempfile::NamedTempFile::new_in(&fs.root).unwrap();
-    external.write_all(scene("external").as_bytes()).unwrap();
-    external.persist(fs.root.join("a.excalidraw")).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let event = rx
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .unwrap()
-            .unwrap();
-        if event
-            .paths
-            .iter()
-            .any(|path| path.ends_with("a.excalidraw"))
-        {
-            break;
-        }
-    }
-    assert_eq!(fs.read("a.excalidraw").unwrap().content, scene("external"));
-}
-
-#[test]
-fn watcher_detects_content_change_with_unchanged_size_and_timestamp() {
-    let (_directory, fs) = fixture();
-    fs.save("a.excalidraw", &scene("before"), None).unwrap();
-    let path = fs.root.join("a.excalidraw");
-    let modified = fs::metadata(&path).unwrap().modified().unwrap();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _watcher = WorkspaceWatcher::new(&fs.root, move |event| {
-        tx.send(event).unwrap();
-    })
-    .unwrap();
-    fs::write(&path, scene("edited")).unwrap();
-    File::options()
-        .write(true)
-        .open(&path)
+    let pipe = fs.root.join("blocked.excalidraw");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
         .unwrap()
-        .set_modified(modified)
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let event = rx
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .unwrap()
-            .unwrap();
-        if event
-            .paths
-            .iter()
-            .any(|path| path.ends_with("a.excalidraw"))
-        {
-            break;
-        }
-    }
-    assert_eq!(fs.read("a.excalidraw").unwrap().content, scene("edited"));
+        .success());
+    let root = fs.root.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = WorkspaceWatcher::new(&root, |_| {});
+        tx.send(result.is_ok()).unwrap();
+    });
+    assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap());
 }

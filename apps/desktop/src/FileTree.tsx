@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -16,15 +15,24 @@ export function FileTree({
   active,
   onOpen,
   onAction,
+  expandedFolders,
+  loadingFolders,
+  folderErrors,
+  onToggle,
+  onRetry,
   level = 0,
 }: {
   entries: FileEntry[];
   active: string | null;
   onOpen: (entry: FileEntry) => void;
   onAction: (entry: FileEntry, x: number, y: number) => void;
+  expandedFolders: Set<string>;
+  loadingFolders: Set<string>;
+  folderErrors: Record<string, string>;
+  onToggle: (entry: FileEntry) => void;
+  onRetry: (entry: FileEntry) => void;
   level?: number;
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   return (
     <ul
       className="file-tree"
@@ -32,7 +40,7 @@ export function FileTree({
       aria-label={level === 0 ? "Workspace files" : undefined}
     >
       {entries.map((entry) => {
-        const expanded = !collapsed.has(entry.path);
+        const expanded = expandedFolders.has(entry.path);
         const folder = entry.kind === "folder";
         const Icon = folder
           ? expanded
@@ -60,13 +68,7 @@ export function FileTree({
                 className="tree-open"
                 title={entry.path}
                 onClick={() => {
-                  if (folder)
-                    setCollapsed((previous) => {
-                      const next = new Set(previous);
-                      if (next.has(entry.path)) next.delete(entry.path);
-                      else next.add(entry.path);
-                      return next;
-                    });
+                  if (folder) onToggle(entry);
                   else onOpen(entry);
                 }}
               >
@@ -94,13 +96,27 @@ export function FileTree({
               </button>
             </div>
             {folder && expanded && (
-              <FileTree
-                entries={entry.children}
-                active={active}
-                onOpen={onOpen}
-                onAction={onAction}
-                level={level + 1}
-              />
+              <>
+                {loadingFolders.has(entry.path) && <div className="tree-state">Waiting for folder…</div>}
+                {folderErrors[entry.path] && (
+                  <div className="tree-state">
+                    {folderErrors[entry.path]}
+                    <button className="text-button" onClick={() => onRetry(entry)}>Retry</button>
+                  </div>
+                )}
+                <FileTree
+                  entries={entry.children}
+                  active={active}
+                  onOpen={onOpen}
+                  onAction={onAction}
+                  expandedFolders={expandedFolders}
+                  loadingFolders={loadingFolders}
+                  folderErrors={folderErrors}
+                  onToggle={onToggle}
+                  onRetry={onRetry}
+                  level={level + 1}
+                />
+              </>
             )}
           </li>
         );

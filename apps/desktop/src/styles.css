@@ -196,6 +196,16 @@ kbd {
 .tree-open svg {
   color: var(--muted);
 }
+.tree-state {
+  padding: 6px 14px 8px 32px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.tree-state button {
+  margin-left: 8px;
+}
 .tree-indent {
   width: 13px;
   flex-shrink: 0;
@@ -445,6 +455,7 @@ h1 {
 }
 .conflict-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 .conflict-actions button {

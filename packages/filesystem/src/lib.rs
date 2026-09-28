@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+mod coordination;
 mod watcher;
 pub use watcher::WorkspaceWatcher;
 
@@ -57,6 +58,7 @@ pub struct Entry {
 }
 
 /// All operations use paths relative to one canonical workspace root.
+#[derive(Clone)]
 pub struct WorkspaceFs {
     pub root: PathBuf,
 }
@@ -153,18 +155,26 @@ impl WorkspaceFs {
     }
 
     pub fn tree(&self) -> Result<Vec<Entry>> {
-        self.walk(&self.root)
+        self.walk(&self.root, true)
     }
 
     /// List a workspace subdirectory using the same path boundary as document I/O.
     pub fn tree_at(&self, relative: Option<&str>) -> Result<Vec<Entry>> {
         match relative {
             None | Some("") => self.tree(),
-            Some(relative) => self.walk(&self.resolve(relative, false)?),
+            Some(relative) => self.walk(&self.resolve(relative, false)?, true),
         }
     }
 
-    fn walk(&self, directory: &Path) -> Result<Vec<Entry>> {
+    /// List only one folder so a cloud workspace never needs full hydration to appear.
+    pub fn list_at(&self, relative: Option<&str>) -> Result<Vec<Entry>> {
+        match relative {
+            None | Some("") => self.walk(&self.root, false),
+            Some(relative) => self.walk(&self.resolve(relative, false)?, false),
+        }
+    }
+
+    fn walk(&self, directory: &Path, recursive: bool) -> Result<Vec<Entry>> {
         let mut entries = Vec::new();
         for item in fs::read_dir(directory).map_err(|e| io_error("Cannot list directory", e))? {
             let item = item.map_err(|e| io_error("Cannot read directory entry", e))?;
@@ -193,8 +203,8 @@ impl WorkspaceFs {
                 } else {
                     "drawing"
                 },
-                children: if kind.is_dir() {
-                    self.walk(&path)?
+                children: if kind.is_dir() && recursive {
+                    self.walk(&path, true)?
                 } else {
                     Vec::new()
                 },
@@ -215,7 +225,7 @@ impl WorkspaceFs {
                 "Only Excalidraw drawings and libraries can be opened",
             ));
         }
-        read_snapshot(&path)
+        coordination::read(&path, read_snapshot)
     }
 
     /// Compare-and-save is serialized across cooperating processes and retry-safe.
@@ -226,7 +236,6 @@ impl WorkspaceFs {
         expected_hash: Option<&str>,
     ) -> Result<Snapshot> {
         validate_drawing(content)?;
-        let _lock = self.lock()?;
         let path = self.resolve(relative, true)?;
         if path.extension().is_none_or(|ext| ext != "excalidraw") {
             return Err(WorkspaceError::new(
@@ -234,6 +243,13 @@ impl WorkspaceFs {
                 "Drawings must have the .excalidraw extension",
             ));
         }
+        coordination::write(&path, |coordinated_path| {
+            self.save_at(coordinated_path, content, expected_hash)
+        })
+    }
+
+    fn save_at(&self, path: &Path, content: &str, expected_hash: Option<&str>) -> Result<Snapshot> {
+        let _lock = self.lock()?;
         let existing = match read_snapshot(&path) {
             Ok(snapshot) => Some(snapshot),
             Err(error) if error.code == "missing" => None,

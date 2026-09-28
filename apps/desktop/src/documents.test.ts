@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyScene } from "@local-excalidraw/model";
 import { Documents } from "./documents";
-import type { DiskSnapshot, DocumentFs } from "./filesystem";
+import type { DiskSnapshot, DocumentFs, RecoveryRecord } from "./filesystem";
 
 const content = (label: string) => JSON.stringify({ ...emptyScene(), label });
 const disk = (label: string): DiskSnapshot => ({
@@ -21,7 +21,22 @@ function deferred<T>() {
 
 class MemoryFs implements DocumentFs {
   files = new Map<string, DiskSnapshot>([["a.excalidraw", disk("initial")]]);
+  records = new Map<string, RecoveryRecord>();
   writes: string[] = [];
+  async recovery(path: string): Promise<RecoveryRecord> {
+    return this.records.get(path) ?? { root: "test", path, written: null, pending: null };
+  }
+  async checkpoint(path: string, text: string, baseHash: string | null): Promise<string> {
+    const hash = Array.from(text).reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 0).toString(16);
+    this.records.set(path, {
+      ...await this.recovery(path),
+      pending: { content: text, hash, baseHash },
+    });
+    return hash;
+  }
+  async acceptExternal(path: string): Promise<void> {
+    this.records.set(path, { ...await this.recovery(path), written: null, pending: null });
+  }
   async read(path: string): Promise<DiskSnapshot> {
     const found = this.files.get(path);
     if (!found) throw { code: "missing", message: "File removed" };
@@ -32,10 +47,16 @@ class MemoryFs implements DocumentFs {
     text: string,
     expected: string | null,
   ): Promise<DiskSnapshot> {
+    await this.checkpoint(path, text, expected);
     if ((this.files.get(path)?.hash ?? null) !== expected)
       throw { code: "conflict", message: "Disk changed" };
     const saved = { content: text, hash: `hash-${text}`, modifiedAt: 2 };
     this.files.set(path, saved);
+    this.records.set(path, {
+      ...await this.recovery(path),
+      written: { content: text, hash: saved.hash, baseHash: null },
+      pending: null,
+    });
     this.writes.push(text);
     return saved;
   }
@@ -167,6 +188,23 @@ describe("document lifecycle", () => {
     });
     expect(store.get("a.excalidraw")?.conflict?.disk).toEqual(disk("external"));
   });
+  it("preserves both versions when an external write lands during save", async () => {
+    const { fs, store } = await setup();
+    const gate = deferred<void>();
+    const actualSave = fs.save.bind(fs);
+    fs.save = async (path, text, expected) => {
+      await gate.promise;
+      return actualSave(path, text, expected);
+    };
+    store.change("a.excalidraw", content("local"), 0);
+    const saving = store.save("a.excalidraw");
+    fs.files.set("a.excalidraw", disk("incoming"));
+    gate.resolve();
+    await expect(saving).rejects.toMatchObject({ code: "conflict" });
+    expect(fs.files.get("a.excalidraw")).toEqual(disk("incoming"));
+    const copy = store.get("a.excalidraw")?.conflict?.copyPath;
+    expect(fs.files.get(copy ?? "")?.content).toBe(content("local"));
+  });
   it("rechecks dirty state after an asynchronous disk read", async () => {
     const { fs, store } = await setup();
     const read = deferred<DiskSnapshot>();
@@ -180,18 +218,20 @@ describe("document lifecycle", () => {
       conflict: { disk: disk("external") },
     });
   });
-  it("ignores out-of-order watcher reads", async () => {
+  it("coalesces repeated watcher reads while a cloud read is pending", async () => {
     const { fs, store } = await setup();
     const first = deferred<DiskSnapshot>();
     const second = deferred<DiskSnapshot>();
     let calls = 0;
     fs.read = () => (++calls === 1 ? first.promise : second.promise);
     const oldRead = store.reconcile("a.excalidraw");
+    const repeated = store.reconcile("a.excalidraw");
+    expect(calls).toBe(1);
+    first.resolve(disk("old"));
+    await Promise.all([oldRead, repeated]);
     const newRead = store.reconcile("a.excalidraw");
     second.resolve(disk("latest"));
     await newRead;
-    first.resolve(disk("old"));
-    await oldRead;
     expect(store.get("a.excalidraw")?.content).toBe(content("latest"));
   });
   it("keep-my-version still rejects a second external write", async () => {
@@ -279,6 +319,111 @@ describe("document lifecycle", () => {
       dirty: false,
       error: null,
     });
+  });
+  it("holds a clean external replacement for a version choice", async () => {
+    const { fs, store } = await setup();
+    store.change("a.excalidraw", content("app-written"), 0);
+    await store.save("a.excalidraw");
+    fs.files.set("a.excalidraw", disk("incoming"));
+    await store.reconcile("a.excalidraw");
+    expect(store.get("a.excalidraw")).toMatchObject({
+      content: content("app-written"),
+      dirty: false,
+      conflict: { disk: disk("incoming") },
+    });
+    await store.reload("a.excalidraw");
+    expect(store.get("a.excalidraw")?.content).toBe(content("incoming"));
+    expect([...fs.files.values()].some((file) => file.content === content("app-written"))).toBe(true);
+  });
+  it("checkpoints a dirty conflict and creates one stable create-only sibling", async () => {
+    const { fs, store } = await setup();
+    store.change("a.excalidraw", content("local"), 0);
+    fs.files.set("a.excalidraw", disk("incoming"));
+    await store.reconcile("a.excalidraw");
+    const copy = store.get("a.excalidraw")?.conflict?.copyPath;
+    expect(copy).toMatch(/^a-local-[0-9a-f]+\.excalidraw$/);
+    expect(fs.files.get(copy ?? "")?.content).toBe(content("local"));
+    expect((await fs.recovery("a.excalidraw")).pending?.content).toBe(content("local"));
+    await store.reconcile("a.excalidraw");
+    expect(store.get("a.excalidraw")?.conflict?.copyPath).toBe(copy);
+    expect(fs.writes.filter((text) => text === content("local"))).toHaveLength(1);
+  });
+  it("recovers a checkpoint after a crash before workspace write", async () => {
+    const fs = new MemoryFs();
+    await fs.checkpoint("a.excalidraw", content("recovered"), disk("initial").hash);
+    const store = new Documents(fs, () => {});
+    stores.push(store);
+    await store.open("a.excalidraw");
+    expect(store.get("a.excalidraw")).toMatchObject({
+      content: content("recovered"),
+      dirty: true,
+      conflict: { disk: disk("initial") },
+    });
+    expect(fs.files.get("a.excalidraw")).toEqual(disk("initial"));
+  });
+  it("opens recovered work while a cloud file is unavailable", async () => {
+    const fs = new MemoryFs();
+    await fs.checkpoint("a.excalidraw", content("recovered"), disk("initial").hash);
+    fs.read = async () => { throw new Error("download in progress"); };
+    const store = new Documents(fs, () => {});
+    stores.push(store);
+    await store.open("a.excalidraw");
+    expect(store.get("a.excalidraw")?.content).toBe(content("recovered"));
+    expect(store.get("a.excalidraw")?.conflict?.disk).toBeNull();
+  });
+  it("opens the last app-written version when the cloud file disappears", async () => {
+    const { fs, store } = await setup();
+    store.change("a.excalidraw", content("written"), 0);
+    await store.save("a.excalidraw");
+    store.dispose();
+    fs.files.delete("a.excalidraw");
+    const restarted = new Documents(fs, () => {});
+    stores.push(restarted);
+    await restarted.open("a.excalidraw");
+    expect(restarted.get("a.excalidraw")?.content).toBe(content("written"));
+    expect(restarted.get("a.excalidraw")?.conflict?.disk).toBeNull();
+  });
+  it("recognizes an uncertain save once its exact bytes appear on disk", async () => {
+    const { fs, store } = await setup();
+    store.change("a.excalidraw", content("local"), 0);
+    fs.files.set("a.excalidraw", disk("local"));
+    await store.reconcile("a.excalidraw");
+    expect(store.get("a.excalidraw")).toMatchObject({
+      dirty: false,
+      savedHash: disk("local").hash,
+      conflict: null,
+    });
+  });
+  it("retains the checkpoint after an uncertain save result", async () => {
+    const { fs, store } = await setup();
+    fs.save = async (path, text, expected) => {
+      await fs.checkpoint(path, text, expected);
+      throw { code: "uncertain", message: "Provider still working" };
+    };
+    store.change("a.excalidraw", content("local"), 0);
+    await expect(store.save("a.excalidraw")).rejects.toMatchObject({ code: "uncertain" });
+    expect((await fs.recovery("a.excalidraw")).pending?.content).toBe(content("local"));
+    expect(store.get("a.excalidraw")).toMatchObject({ dirty: true, error: "Provider still working" });
+  });
+  it("does not write the workspace when local checkpointing fails", async () => {
+    const { fs, store } = await setup();
+    fs.checkpoint = async () => { throw new Error("recovery disk full"); };
+    store.change("a.excalidraw", content("local"), 0);
+    await expect(store.save("a.excalidraw")).rejects.toThrow("recovery disk full");
+    expect(fs.files.get("a.excalidraw")).toEqual(disk("initial"));
+    expect(store.get("a.excalidraw")?.error).toContain("recovery disk full");
+  });
+  it("never overwrites an unrelated file at the stable conflict-copy path", async () => {
+    const { fs, store } = await setup();
+    store.change("a.excalidraw", content("local"), 0);
+    const hash = await fs.checkpoint("a.excalidraw", content("local"), disk("initial").hash);
+    const copy = `a-local-${hash.slice(0, 16)}.excalidraw`;
+    fs.files.set(copy, disk("unrelated"));
+    fs.files.set("a.excalidraw", disk("incoming"));
+    await store.reconcile("a.excalidraw");
+    expect(fs.files.get(copy)).toEqual(disk("unrelated"));
+    expect(store.get("a.excalidraw")?.error).toContain("Could not create local version");
+    expect(store.get("a.excalidraw")?.content).toBe(content("local"));
   });
   it("keeps each tab's scene isolated and follows folder renames", async () => {
     const { fs, store } = await setup();
