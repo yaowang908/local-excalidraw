@@ -1,0 +1,122 @@
+.viewer-shell {
+  --surface: #ffffff;
+  --sidebar: #f5f5f6;
+  --hover: #e8e9eb;
+  --selected: #e4edf3;
+  --border: #dfe1e4;
+  --text: #25282d;
+  --muted: #6b7078;
+  --accent: #315f80;
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  color-scheme: light;
+  color: var(--text);
+  background: var(--surface);
+}
+.viewer-shell[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #202124;
+  --sidebar: #27282c;
+  --hover: #36383e;
+  --selected: #304352;
+  --border: #3b3d43;
+  --text: #e5e6e8;
+  --muted: #a2a5ad;
+  --accent: #88b4d4;
+}
+.viewer-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  min-width: 220px;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+}
+.viewer-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.viewer-sidebar-heading button {
+  font-size: 12px;
+}
+.viewer-folders {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 0;
+}
+.viewer-tree {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.viewer-entry {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.viewer-entry:hover {
+  background: var(--hover);
+}
+.viewer-entry.selected {
+  background: var(--selected);
+}
+.viewer-entry span:first-child {
+  width: 16px;
+  flex: 0 0 16px;
+}
+.viewer-entry span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.viewer-tree-state,
+.viewer-note {
+  padding: 8px 14px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.viewer-note {
+  border-top: 1px solid var(--border);
+}
+.viewer-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.viewer-empty {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+.viewer-empty h1 {
+  margin: 0 0 10px;
+  font-size: 21px;
+}
+.viewer-empty p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+@media (max-width: 700px) {
+  .viewer-shell {
+    flex-direction: column;
+  }
+  .viewer-sidebar {
+    width: 100%;
+    min-width: 0;
+    max-height: 42dvh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
