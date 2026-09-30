@@ -1,0 +1,50 @@
+name: Release macOS app
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches app version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Build app bundle
+        run: |
+          npm ci
+          npm run bundle
+
+      - name: Package app
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          app="apps/desktop/src-tauri/target/release/bundle/macos/Local Excalidraw.app"
+          archive="$RUNNER_TEMP/Local-Excalidraw-v${version}.zip"
+          test -d "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+          echo "RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" "$RELEASE_ARCHIVE" \
+            --title "Local Excalidraw $version" \
+            --generate-notes
