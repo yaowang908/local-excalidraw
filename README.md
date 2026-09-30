@@ -4,6 +4,9 @@ A macOS desktop workspace for ordinary `.excalidraw` files. Built with Tauri 2,
 React, TypeScript, and the official Excalidraw editor. Files are the source of
 truth; there is no database, account, or hosted backend.
 
+<img width="1441" height="960" alt="CleanShot 2026-09-30 at 00 04 56" src="https://github.com/user-attachments/assets/993501dd-28ca-47ca-a969-8e0b2cd52f08" />
+
+
 The desktop and a local MCP server edit the same files, with shared locking,
 atomic saves, and conflict protection. PNG rendering, version history, and crash
 recovery are deferred.
