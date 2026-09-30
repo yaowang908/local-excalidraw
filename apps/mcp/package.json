@@ -1,6 +1,6 @@
 {
   "name": "@local-excalidraw/mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,7 +13,7 @@
     "start": "node src/index.ts"
   },
   "dependencies": {
-    "@local-excalidraw/model": "0.1.0",
+    "@local-excalidraw/model": "0.1.2",
     "@modelcontextprotocol/server": "2.1.0",
     "zod": "4.6.5"
   },

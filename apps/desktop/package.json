@@ -1,6 +1,6 @@
 {
   "name": "@local-excalidraw/desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
-    "@local-excalidraw/model": "0.1.0",
+    "@local-excalidraw/model": "0.1.2",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.3",
     "lucide-react": "1.47.0",
