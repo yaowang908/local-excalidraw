@@ -38,6 +38,7 @@ import { FileTree } from "./FileTree";
 import { Prompt, type PromptOptions } from "./Prompt";
 
 type Session = { fs: NativeFs; documents: Documents };
+type WorkspaceRoute = { kind: "current" | "focused" | "new"; root: string };
 const basename = (path: string): string => path.split("/").pop() ?? path;
 const parent = (path: string): string =>
   path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
@@ -68,6 +69,9 @@ export function App() {
   const [openingPath, setOpeningPath] = useState<string | null>(null);
   const [openingError, setOpeningError] = useState<{ path: string; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const [viewerBusy, setViewerBusy] = useState(false);
   const [prompt, setPrompt] = useState<PromptOptions | null>(null);
   const [busy, setBusy] = useState(false);
   const [starting, setStarting] = useState(true);
@@ -78,14 +82,13 @@ export function App() {
     y: number;
   } | null>(null);
   const [workspaceMenu, setWorkspaceMenu] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark">(
-    matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
-  );
+  const theme = "dark";
   const currentSession = useRef<Session | null>(null);
   const activePath = useRef(active);
   activePath.current = active;
   const apis = useRef(new Map<string, ExcalidrawImperativeAPI>());
   const savingPreferences = useRef(Promise.resolve());
+  const closingWindow = useRef(false);
   const treeRequest = useRef(0);
   const treePending = useRef<{ target: Session; promise: Promise<void> } | null>(null);
   const folderPending = useRef(new Map<string, { target: Session; promise: Promise<void> }>());
@@ -101,6 +104,36 @@ export function App() {
   const run = useCallback((action: () => Promise<unknown>) => {
     void action().catch((reason) => setError(errorMessage(reason)));
   }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    void invoke<string | null>("viewer_url")
+      .then((url) => {
+        if (active) setViewerUrl(url);
+      })
+      .catch((reason: unknown) => {
+        if (active) setViewerError(errorMessage(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  const toggleViewer = useCallback(async () => {
+    setViewerBusy(true);
+    setViewerError(null);
+    try {
+      if (viewerUrl) {
+        await invoke("stop_viewer");
+        setViewerUrl(null);
+      } else {
+        setViewerUrl(await invoke<string>("start_viewer"));
+      }
+    } catch (reason) {
+      setViewerError(errorMessage(reason));
+    } finally {
+      setViewerBusy(false);
+    }
+  }, [viewerUrl]);
   const refresh = useCallback((target: Session): Promise<void> => {
     if (treePending.current?.target === target) return treePending.current.promise;
     const request = ++treeRequest.current;
@@ -177,6 +210,8 @@ export function App() {
         const previous = currentSession.current;
         if (previous) await previous.documents.flush();
         const root = await invoke<string>("open_workspace", { path });
+        setViewerUrl(null);
+        setViewerError(null);
         const fs = new NativeFs(root);
         const next = { fs, documents: new Documents(fs, setError) };
         previous?.documents.dispose();
@@ -223,7 +258,11 @@ export function App() {
         multiple: false,
         title: "Open Excalidraw workspace",
       });
-      if (path) await openWorkspace(path);
+      if (path) {
+        const route = await invoke<WorkspaceRoute>("route_workspace", { path, selectedFile: null });
+        if (route.kind === "current" && currentSession.current?.fs.root !== route.root)
+          await openWorkspace(route.root);
+      }
     } finally {
       setBusy(false);
       setWorkspaceMenu(false);
@@ -231,12 +270,9 @@ export function App() {
   }, [openWorkspace]);
 
   useEffect(() => {
-    const media = matchMedia("(prefers-color-scheme: dark)");
-    const update = () => setTheme(media.matches ? "dark" : "light");
-    media.addEventListener("change", update);
     if (!isTauri()) {
       setStarting(false);
-      return () => media.removeEventListener("change", update);
+      return;
     }
     void invoke<Preferences>("load_preferences")
       .then(async (preferences) => {
@@ -249,12 +285,37 @@ export function App() {
       })
       .catch((reason) => setError(errorMessage(reason)))
       .finally(() => setStarting(false));
-    return () => media.removeEventListener("change", update);
   }, [openWorkspace]);
 
   useEffect(() => {
     documentElementTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!session || !isTauri()) return;
+    let stopped = false;
+    let unlisten: (() => void) | undefined;
+    void listen<string>("open-drawing", (event) => {
+      if (currentSession.current !== session) return;
+      const path = event.payload;
+      setActive(path);
+      setOpeningPath(path);
+      setOpeningError(null);
+      void session.documents.open(path)
+        .catch((reason) => {
+          setOpeningError({ path, message: errorMessage(reason) });
+          setError(`Could not open ${path}: ${errorMessage(reason)}`);
+        })
+        .finally(() => setOpeningPath((opening) => opening === path ? null : opening));
+    }).then((stop) => {
+      if (stopped) stop();
+      else unlisten = stop;
+    }).catch((reason) => setError(errorMessage(reason)));
+    return () => {
+      stopped = true;
+      unlisten?.();
+    };
+  }, [session]);
 
   useEffect(() => {
     if (!session || starting) return;
@@ -264,6 +325,7 @@ export function App() {
       activeTab: active,
     };
     const timer = setTimeout(() => {
+      if (closingWindow.current) return;
       savingPreferences.current = savingPreferences.current
         .then(() => invoke<void>("save_preferences", { preferences }))
         .catch((reason) => setError(errorMessage(reason)));
@@ -329,9 +391,10 @@ export function App() {
     let closing = false;
     let stopped = false;
     const cleanups: (() => void)[] = [];
-    const close = () => {
+    const close = (preserveSession: boolean) => {
       if (closing) return;
       closing = true;
+      closingWindow.current = true;
       setBusy(true);
       run(async () => {
         try {
@@ -348,9 +411,10 @@ export function App() {
                 activeTab: activePath.current,
               },
             });
-          await invoke("exit_app");
+          await invoke("close_window", { preserveSession });
         } finally {
           closing = false;
+          closingWindow.current = false;
           setBusy(false);
         }
       });
@@ -358,9 +422,9 @@ export function App() {
     void Promise.all([
       getCurrentWindow().onCloseRequested((event) => {
         event.preventDefault();
-        close();
+        close(false);
       }),
-      listen("app-close-requested", close),
+      listen("app-close-requested", () => close(true)),
     ])
       .then((list) => {
         if (stopped) list.forEach((stop) => stop());
@@ -541,8 +605,16 @@ export function App() {
     if (!selected) return;
     let target = currentSession.current;
     if (!target || !selected.startsWith(`${target.fs.root}/`)) {
-      await openWorkspace(parent(selected));
-      target = currentSession.current;
+      const file = basename(selected);
+      const route = await invoke<WorkspaceRoute>("route_workspace", {
+        path: parent(selected),
+        selectedFile: file,
+      });
+      if (route.kind === "current") {
+        await openWorkspace(route.root, [file], file);
+      }
+      setWorkspaceMenu(false);
+      return;
     }
     if (target) {
       const path = selected.slice(target.fs.root.length + 1);
@@ -630,7 +702,7 @@ export function App() {
               />
               <div className="context-menu workspace-menu">
                 <button onClick={() => run(chooseWorkspace)}>
-                  Open workspace…<kbd>⌘O</kbd>
+                  Open workspace in window…<kbd>⌘O</kbd>
                 </button>
                 <button onClick={() => run(chooseFile)}>
                   Open drawing…<kbd>⇧⌘O</kbd>
@@ -758,6 +830,34 @@ export function App() {
                   )}
                 </div>
               )}
+            </div>
+            <div className="viewer-location">
+              <div className="viewer-controls">
+                <span>Read-only viewer</span>
+                <button
+                  className="text-button"
+                  disabled={!session || busy || viewerBusy}
+                  onClick={() => { void toggleViewer(); }}
+                >
+                  {viewerBusy ? "Working…" : viewerUrl ? "Stop" : "Start"}
+                </button>
+              </div>
+              {viewerUrl ? (
+                <>
+                  <code>{viewerUrl}</code>
+                  <button
+                    className="text-button"
+                    onClick={() => run(async () => {
+                      await navigator.clipboard.writeText(viewerUrl);
+                    })}
+                  >
+                    Copy URL
+                  </button>
+                </>
+              ) : (
+                <p>{session ? "Off. Start to share this folder." : "Open a folder to share it."}</p>
+              )}
+              {viewerError && <p role="alert">{viewerError}</p>}
             </div>
             {session && (
               <div className="workspace-location" title={session.fs.root}>

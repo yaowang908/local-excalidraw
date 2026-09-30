@@ -20,6 +20,10 @@ npm run desktop
 
 Choose **Open workspace** and select a directory. Existing drawings appear in
 the sidebar. Click a drawing to open a tab; use **New drawing** to create one.
+Opening another folder keeps the current workspace in its own window and opens
+the new folder in another window. Choosing a folder already open focuses that
+window. Open windows and their tabs return after a normal app quit; closing one
+window removes it from the next launch.
 Right-click a file or folder, or use its `…` button, to rename, move, reveal in
 Finder, or move to the macOS Trash. Move destinations are workspace-relative
 paths, and their parent folder must already exist.
@@ -33,12 +37,36 @@ The local build is not signed with an Apple Developer identity or notarized for
 distribution. `npm run dev` runs a browser preview; native file access requires
 `npm run desktop` or the built app.
 
+## Read-only viewing on another device
+
+Open a folder and click **Start** under Read-only viewer in the file sidebar.
+The app then starts an HTTP viewer on its private LAN address at port 43871,
+or an available port if that one is occupied, and shows its full URL. Open it
+on a device on the same local network. **Stop** closes the viewer, as does
+closing its window. Each start creates a fresh access path; treat
+the URL as a private link. If the Mac has no private LAN address, the app shows
+an error instead of opening a listener on every interface. Stop and start the
+viewer after switching networks to get an address for the new connection. In
+desktop development mode, restart the dev command after changing the viewer
+page so its served assets are rebuilt.
+
+Each window's viewer lists and reads only `.excalidraw` drawings inside its own
+folder. Folder access uses the same path checks as desktop reads, so parent
+traversal, hidden files, and symlinks are excluded.
+The server has no edit route and does not expose local recovery files. It serves
+the last saved file contents, not an unsaved canvas. Requests to slow cloud files
+return a retryable unavailable response instead of blocking the app.
+
+This is plain HTTP for a trusted local network. Anyone with the URL and network
+access can view the selected drawings while the app runs; do not forward the
+link or expose the port to the internet. The viewer stops when the app quits.
+
 ## Editing and conflicts
 
 - Each tab keeps its own canvas, viewport, selection, and undo history in memory.
 - Autosave runs 750 ms after document content stops changing. Selection, pan,
   zoom, and initial scene restoration do not rewrite an untouched file.
-- Closing a tab, switching workspaces, and a normal quit flush pending saves.
+- Closing a tab or window, and a normal quit flush pending saves.
   An unresolved conflict or failed save prevents discarding the buffer.
 - Clean drawings reload automatically when the disk hash changes. The status bar
   shows **Updated externally**. Native notifications are backed by a two-second
@@ -68,7 +96,7 @@ hosts remain blocked.
 
 | Shortcut    | Action                                                  |
 | ----------- | ------------------------------------------------------- |
-| Cmd+O       | Open workspace                                          |
+| Cmd+O       | Open workspace in a window                              |
 | Cmd+Shift+O | Open drawing; opens its parent as a workspace if needed |
 | Cmd+N       | New drawing                                             |
 | Cmd+Shift+N | New folder                                              |

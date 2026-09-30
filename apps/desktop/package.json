@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "assets": "node scripts/copy-assets.mjs",
-    "dev": "npm run assets && vite --host 127.0.0.1",
+    "dev": "npm run build && vite --host 127.0.0.1",
     "build": "npm run assets && tsc --noEmit -p ../../tsconfig.json && vite build",
     "tauri": "tauri"
   },
