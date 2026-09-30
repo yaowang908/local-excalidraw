@@ -10,7 +10,7 @@ A macOS app for organizing and editing ordinary `.excalidraw` files in folders y
 brew install --cask yaowang908/tap/local-excalidraw
 ```
 
-The app is currently distributed without Apple Developer signing or notarization. macOS may show a warning the first time you open it.
+The app is ad-hoc signed but not notarized. macOS may block the first launch. If you trust the downloaded app, try opening it, then choose **Open Anyway** in **System Settings → Privacy & Security**. See [Apple’s guidance](https://support.apple.com/en-gb/102445).
 
 ## Use the app
 

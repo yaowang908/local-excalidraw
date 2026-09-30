@@ -37,6 +37,8 @@ jobs:
           app="apps/desktop/src-tauri/target/release/bundle/macos/Local Excalidraw.app"
           archive="$RUNNER_TEMP/Local-Excalidraw-v${version}.zip"
           test -d "$app"
+          codesign --force --deep --sign - --timestamp=none "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
           echo "RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
 
