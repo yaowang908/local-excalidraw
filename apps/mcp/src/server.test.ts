@@ -86,6 +86,7 @@ describe("real stdio MCP and native filesystem", () => {
       [
         "list_files",
         "read_diagram",
+        "preview_diagram",
         "create_diagram",
         "get_elements",
         "add_element",

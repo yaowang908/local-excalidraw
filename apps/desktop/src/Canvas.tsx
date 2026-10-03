@@ -1,4 +1,5 @@
-import { Component, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Scan } from "lucide-react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Excalidraw, MainMenu, serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -25,6 +26,7 @@ export function Canvas({
 }) {
   // The parent remounts only when disk reconciliation replaces this scene.
   const scene = useMemo(() => parseScene(document.content), []);
+  const editor = useRef<ExcalidrawImperativeAPI | null>(null);
   return (
     <div
       className="canvas-pane"
@@ -34,7 +36,23 @@ export function Canvas({
       <SceneBoundary path={document.path}>
         <Excalidraw
           initialData={{ ...scene, scrollToContent: true }}
-          excalidrawAPI={(api) => register(document.path, api)}
+          excalidrawAPI={(api) => {
+            editor.current = api;
+            register(document.path, api);
+          }}
+          renderTopRightUI={() => (
+            <button
+              type="button"
+              title="Fit all content in view"
+              onClick={() => editor.current?.scrollToContent(undefined, {
+                fitToViewport: true,
+                viewportZoomFactor: 0.9,
+              })}
+            >
+              <Scan size={16} />
+              Fit content
+            </button>
+          )}
           onChange={(elements, appState, files) =>
             documents.change(
               document.path,

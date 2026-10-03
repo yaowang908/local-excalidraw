@@ -1,0 +1,21 @@
+{
+  "name": "local-excalidraw",
+  "version": "0.1.3",
+  "description": "Create, edit, and preview local Excalidraw drawings in Codex.",
+  "author": { "name": "Yao Wang" },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Local Excalidraw",
+    "shortDescription": "Edit and preview local Excalidraw drawings",
+    "longDescription": "Work with drawings in your OneDrive Excalidraw folder and display saved changes in Codex’s browser side panel. Runs locally using the Local Excalidraw source checkout.",
+    "developerName": "Yao Wang",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Show a drawing in the side panel.",
+      "Create an architecture diagram in my Excalidraw folder.",
+      "Update an existing drawing and preview the saved result."
+    ]
+  }
+}
