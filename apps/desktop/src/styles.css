@@ -343,6 +343,9 @@ kbd {
 .canvas-pane[hidden] {
   display: none;
 }
+.canvas-pane .excalidraw .default-sidebar-trigger {
+  display: none;
+}
 .canvas-error {
   padding: 40px;
   max-width: 620px;

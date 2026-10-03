@@ -1,7 +1,7 @@
 # Local Excalidraw MCP
 
-A local stdio server built with the official MCP TypeScript SDK. No HTTP listener,
-API key, account, or hosted service is required. The configured workspace is the
+A local stdio server built with the official MCP TypeScript SDK. No API key, account, or hosted service is required. A read-only loopback HTTP
+viewer starts only when `preview_diagram` is called. The configured workspace is the
 only directory exposed by its tools. The desktop does not need to be running.
 
 ## Build and connect
@@ -37,6 +37,38 @@ The server resolves it relative to its own source, so it works from any working
 directory. Both it and the desktop use `packages/filesystem`, including the same
 advisory lock, path checks, content hashes, fsync, and atomic rename implementation.
 
+## Preview in Codex’s side panel
+
+Build the browser viewer once (and rebuild after changing its source):
+
+```sh
+npm run build
+```
+
+After restarting the connected MCP server, ask Codex to preview a saved drawing.
+Call `preview_diagram` with a workspace-relative `path`, then open the returned
+`url` with Codex’s `open_in_codex` tool:
+
+```json
+{
+  "target": { "type": "browser", "url": "<returned preview URL>" },
+  "placement": "right"
+}
+```
+
+The panel shows the Excalidraw canvas with pan and zoom. It polls saved revisions
+about every two seconds and updates without resetting the viewport. Unsaved
+changes in the desktop app are not shown. A read failure keeps the last displayed
+scene and shows an error until the file becomes readable again.
+
+The server binds only to `127.0.0.1` on a dynamically assigned port. The random
+access URL is local to that MCP connection; closing or restarting the connection
+stops the viewer and invalidates old URLs. Concurrent preview requests share the
+listener. Reads use the same native workspace validation as the editing tools;
+there are no HTTP write routes. This is a browser panel, rather than a registered
+plugin file viewer or a new item in Codex’s Tools menu. It does not require the
+desktop app to run.
+
 ## Tools
 
 All diagram paths are relative to the configured root. Parent folders must exist;
@@ -46,6 +78,7 @@ elements; existing binary assets stay in the file, outside tool responses.
 | Tool               | Input beyond `path`                                           | Behavior                                           |
 | ------------------ | ------------------------------------------------------------- | -------------------------------------------------- |
 | `list_files`       | Optional directory `path`                                     | Recursively list folders, drawings, libraries      |
+| `preview_diagram`  | —                                                             | Return a live read-only local browser preview URL   |
 | `read_diagram`     | —                                                             | Read simplified elements and current hash          |
 | `get_elements`     | Optional `ids`, `type`                                        | Filter the simplified element view                 |
 | `create_diagram`   | Optional `elements`, `operations`                             | Create-only atomic save; never overwrite           |

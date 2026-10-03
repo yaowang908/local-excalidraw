@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync tldraw to Excalidraw"
+  short_description: "Sync tldraw pages into your OneDrive drawing folder"
+  default_prompt: "Use $sync-tldraw-to-excalidraw to sync my selected tldraw board pages into my OneDrive Excalidraw folder and open the result in Local Excalidraw."

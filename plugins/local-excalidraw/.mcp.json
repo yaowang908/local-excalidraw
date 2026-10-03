@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "local_excalidraw": {
+      "command": "/absolute/path/to/node",
+      "args": [
+        "/absolute/path/to/Local-exclidraw/apps/mcp/src/index.ts",
+        "--workspace",
+        "/absolute/path/to/drawings"
+      ]
+    }
+  }
+}
