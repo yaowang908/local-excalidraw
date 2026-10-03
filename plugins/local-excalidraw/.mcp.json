@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "local_excalidraw": {
+      "command": "/Users/yaowang/.nvm/versions/node/v24.19.0/bin/node",
+      "args": [
+        "/Users/yaowang/Documents/Local-exclidraw/apps/mcp/src/index.ts",
+        "--workspace",
+        "/Users/yaowang/Library/CloudStorage/OneDrive-Personal/Excalidraw"
+      ]
+    }
+  }
+}

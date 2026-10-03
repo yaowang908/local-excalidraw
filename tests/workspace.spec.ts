@@ -13,6 +13,11 @@ type TestScene = {
   appState: Record<string, unknown>;
   files: Record<string, unknown>;
 };
+type TestRecoveryVersion = {
+  content: string;
+  hash: string;
+  baseHash: string | null;
+};
 declare global {
   interface Window {
     testWorkspace: {
@@ -72,6 +77,10 @@ test.beforeEach(async ({ page }) => {
       "scratch.excalidraw": JSON.stringify({ ...scene, elements: [] }),
     };
     const folders = new Set(["architecture"]);
+    const recoveries = new Map<string, {
+      written: TestRecoveryVersion | null;
+      pending: TestRecoveryVersion | null;
+    }>();
     const callbacks = new Map<number, (payload: unknown) => void>();
     const listeners = new Map<string, number[]>();
     let callbackId = 0;
@@ -106,7 +115,7 @@ test.beforeEach(async ({ page }) => {
           path,
           name: path.split("/").pop() ?? path,
           kind: folders.has(path) ? "folder" : "drawing",
-          children: folders.has(path) ? tree(path) : [],
+          children: [],
         });
       }
       return children;
@@ -140,6 +149,27 @@ test.beforeEach(async ({ page }) => {
               openTabs: [],
               activeTab: null,
             };
+          if (command === "viewer_url") return null;
+          if (command === "read_recovery")
+            return { root: "/workspace", path, written: null, pending: null, ...recoveries.get(path) };
+          if (command === "checkpoint_document") {
+            const content = String(args.content);
+            const pending = {
+              content,
+              hash: hash(content),
+              baseHash: typeof args.baseHash === "string" ? args.baseHash : null,
+            };
+            recoveries.set(path, { written: recoveries.get(path)?.written ?? null, pending });
+            return pending.hash;
+          }
+          if (command === "accept_external") {
+            const disk = snapshot(path);
+            recoveries.set(path, {
+              written: { content: disk.content, hash: disk.hash, baseHash: disk.hash },
+              pending: null,
+            });
+            return;
+          }
           if (command === "youtube_embed_base") {
             if (window.testWorkspace.embedError)
               throw new Error(window.testWorkspace.embedError);
@@ -153,7 +183,7 @@ test.beforeEach(async ({ page }) => {
             return;
           if (command === "open_workspace" || command === "plugin:dialog|open")
             return "/workspace";
-          if (command === "list_entries") return tree();
+          if (command === "list_entries") return tree(args.path == null ? "" : path);
           if (command === "read_document") return snapshot(path);
           if (command === "save_document") {
             const existing = files[path];
@@ -163,6 +193,12 @@ test.beforeEach(async ({ page }) => {
             )
               throw { code: "conflict", message: "File changed externally" };
             files[path] = String(args.content);
+            const content = files[path];
+            const pending = recoveries.get(path)?.pending ?? null;
+            recoveries.set(path, {
+              written: { content, hash: hash(content), baseHash: typeof args.expectedHash === "string" ? args.expectedHash : null },
+              pending: pending?.hash === hash(content) ? null : pending,
+            });
             window.testWorkspace.saves.push(path);
             emit();
             return snapshot(path);
@@ -212,6 +248,7 @@ test.beforeEach(async ({ page }) => {
     });
   }, initial);
   await page.goto("/");
+  await page.getByRole("button", { name: "architecture", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "api", exact: true }),
   ).toBeVisible();
@@ -223,7 +260,7 @@ async function openApi(page: Page) {
     page.locator(".canvas-pane:not([hidden]) canvas.interactive"),
   ).toBeVisible();
   await expect(
-    page.getByText("All changes saved", { exact: true }),
+    page.getByText("Saved locally", { exact: true }),
   ).toBeVisible();
 }
 
@@ -238,6 +275,21 @@ async function drawRectangle(page: Page) {
   await page.mouse.move(bounds.x + 730, bounds.y + 520, { steps: 5 });
   await page.mouse.up();
 }
+
+test("fits drawing content from the top-right button and hides Library", async ({ page }) => {
+  await openApi(page);
+  const editor = page.locator(".canvas-pane:not([hidden])");
+  await expect(editor.locator(".default-sidebar-trigger")).toBeHidden();
+  const fit = editor.getByRole("button", { name: "Fit content", exact: true });
+  await expect(fit).toBeVisible();
+  await fit.click();
+  const zoom = editor.locator(".reset-zoom-button");
+  const fittedZoom = await zoom.innerText();
+  await editor.getByRole("button", { name: "Zoom out", exact: true }).click();
+  await expect(zoom).not.toHaveText(fittedZoom);
+  await fit.click();
+  await expect(zoom).toHaveText(fittedZoom);
+});
 
 test("renders native YouTube embeds with an HTTP Referer under the desktop frame policy", async ({
   page,
@@ -483,15 +535,15 @@ test("reloads clean external edits and protects dirty edits", async ({
   page,
 }) => {
   await openApi(page);
+  const canvas = page.locator(".canvas-pane:not([hidden]) canvas.static");
+  const before = await canvas.screenshot();
   const external = { ...initial, appState: { viewBackgroundColor: "#f4fce3" } };
   await page.evaluate(
     (scene) =>
       window.testWorkspace.external("architecture/api.excalidraw", scene),
     external,
   );
-  await expect(
-    page.getByText("Updated externally", { exact: true }),
-  ).toBeVisible();
+  await expect.poll(async () => (await canvas.screenshot()).equals(before)).toBe(false);
   await drawRectangle(page);
   await page.evaluate(
     (scene) =>
@@ -502,7 +554,7 @@ test("reloads clean external edits and protects dirty edits", async ({
     page.getByRole("region", { name: "File conflict" }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Keep my version", exact: true })
+    .getByRole("button", { name: "Make mine primary", exact: true })
     .click();
   await expect(
     page.getByRole("region", { name: "File conflict" }),
