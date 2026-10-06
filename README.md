@@ -2,6 +2,7 @@
 
 A macOS app for editing and organizing ordinary `.excalidraw` files. Your drawings stay in folders you choose. No account or hosted backend is required.
 
+<img width="1360" height="900" alt="Local Excalidraw with a sample drawing and the Codex chat panel" src="docs/assets/workspace.png" />
 
 ## Features
 

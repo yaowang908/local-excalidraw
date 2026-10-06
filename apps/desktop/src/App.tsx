@@ -882,9 +882,9 @@ export function App() {
               {viewerError && <p role="alert">{viewerError}</p>}
             </div>
             {session && (
-              <div className="workspace-location" title={session.fs.root}>
+              <div className="workspace-location" title={basename(session.fs.root)}>
                 <FolderOpen size={13} />
-                <span>{session.fs.root}</span>
+                <span>{basename(session.fs.root)}</span>
               </div>
             )}
           </aside>

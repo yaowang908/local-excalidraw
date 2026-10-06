@@ -4,6 +4,8 @@ import { join, resolve } from "node:path";
 import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { emptyScene } from "@local-excalidraw/model";
+import { applyOperations } from "@local-excalidraw/model/operations";
 
 type TestScene = {
   type: string;
@@ -300,6 +302,54 @@ async function drawRectangle(page: Page) {
   await page.mouse.move(bounds.x + 730, bounds.y + 520, { steps: 5 });
   await page.mouse.up();
 }
+
+test("displays only the workspace folder name, including its tooltip", async ({ page }) => {
+  const location = page.locator(".workspace-location");
+  await expect(location).toHaveText("workspace");
+  await expect(location).toHaveAttribute("title", "workspace");
+});
+
+test("requires repository selection before a conversation and retains grants on resume", async ({ page }) => {
+  await openApi(page);
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  const panel = page.getByRole("complementary", { name: "Codex chat" });
+  await panel.getByText("Session settings", { exact: true }).click();
+  const allow = panel.getByRole("button", { name: "Allow repository…", exact: true });
+  await allow.click();
+  await expect(panel.getByRole("button", { name: "Remove repository workspace" })).toBeEnabled();
+  await panel.getByRole("button", { name: "Start session", exact: true }).click();
+  await expect(allow).toBeDisabled();
+  await panel.getByRole("button", { name: "End session", exact: true }).click();
+  await expect(allow).toBeDisabled();
+  await panel.getByRole("button", { name: "Resume session", exact: true }).click();
+  const starts = await page.evaluate(() => window.testWorkspace.codexRequests.filter((request) => request.command === "codex_start"));
+  expect(starts.map((request) => request.args.repositories)).toEqual([["/workspace"], ["/workspace"]]);
+  await panel.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(allow).toBeEnabled();
+  await panel.getByRole("button", { name: "Remove repository workspace" }).click();
+  await panel.getByRole("button", { name: "Start session", exact: true }).click();
+  expect(await page.evaluate(() => window.testWorkspace.codexRequests.filter((request) => request.command === "codex_start").at(-1)?.args.repositories)).toEqual([]);
+});
+
+test("captures the README sample without personal paths or sharing credentials", async ({ page }) => {
+  const scene = applyOperations(emptyScene(), [
+    { op: "add", element: { id: "ui", type: "rectangle", x: 80, y: 100, width: 210, height: 100, text: "Drawing editor", style: { backgroundColor: "#dbe4ff" } } },
+    { op: "add", element: { id: "native", type: "rectangle", x: 370, y: 100, width: 210, height: 100, text: "Native services", style: { backgroundColor: "#d3f9d8" } } },
+    { op: "add", element: { id: "files", type: "rectangle", x: 370, y: 300, width: 210, height: 100, text: "Drawing files", style: { backgroundColor: "#fff3bf" } } },
+    { op: "add", element: { id: "agent", type: "rectangle", x: 80, y: 300, width: 210, height: 100, text: "Codex session", style: { backgroundColor: "#ffecdf" } } },
+    { op: "connect", id: "ipc", from: "ui", to: "native", label: "IPC" },
+    { op: "connect", id: "save", from: "native", to: "files", label: "Save" },
+    { op: "connect", id: "tools", from: "agent", to: "native", label: "Drawing tools" },
+  ]);
+  const sample: TestScene = { ...scene, elements: scene.elements.map((element) => ({ ...element })) };
+  await page.evaluate((value) => window.testWorkspace.external("architecture/api.excalidraw", value), sample);
+  await openApi(page);
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  await page.getByRole("button", { name: "Fit content", exact: true }).click();
+  await expect(page.locator(".workspace-location")).toHaveText("workspace");
+  await expect(page.locator(".viewer-location code")).toHaveCount(0);
+  await page.screenshot({ path: "output/playwright/readme-sample.png" });
+});
 
 test("fits drawing content from the top-right button and hides Library", async ({ page }) => {
   await openApi(page);

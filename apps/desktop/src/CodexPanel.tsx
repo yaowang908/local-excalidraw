@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUp, PanelRightClose, Plus, Square, X } from "lucide-react";
+import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
 import { CodexChat } from "./codex";
 
 /** A collapsible native conversation beside the drawing, with explicit access. */
@@ -13,6 +14,7 @@ export function CodexPanel({ chat, open, activePath, openPaths, onClose }: {
   const state = useSyncExternalStore(chat.subscribe, chat.getSnapshot);
   const [draft, setDraft] = useState("");
   const [executable, setExecutable] = useState("");
+  const [repositories, setRepositories] = useState<string[]>([]);
   const [width, setWidth] = useState(380);
   const [target, setTarget] = useState(activePath ?? "");
   const [adding, setAdding] = useState("");
@@ -38,7 +40,7 @@ export function CodexPanel({ chat, open, activePath, openPaths, onClose }: {
   const send = async () => {
     const text = draft.trim();
     if (!text || !selected || working) return;
-    if (state.phase !== "ready") await chat.connect(executable);
+    if (state.phase !== "ready") await chat.connect(executable, repositories);
     setFollow(true);
     await chat.send(text, selected);
     // A blocked save must leave the unsent draft available for another attempt.
@@ -154,11 +156,26 @@ export function CodexPanel({ chat, open, activePath, openPaths, onClose }: {
         <details>
           <summary>Session settings</summary>
           <label>Codex executable<input aria-label="Codex executable" placeholder="Auto-detect, or /absolute/path/to/codex" value={executable} disabled={working || state.phase === "ready"} onChange={(event) => setExecutable(event.target.value)} /></label>
+          <p>Repository reads</p>
+          {repositories.map((path) => {
+            const name = path.split("/").pop() || path;
+            return <div className="codex-add-drawing" key={path}>
+              <span>{name}</span>
+              <button type="button" className="icon-button" aria-label={`Remove repository ${name}`} disabled={working || state.threadId !== null} onClick={() => setRepositories((current) => current.filter((root) => root !== path))}><X size={12} /></button>
+            </div>;
+          })}
+          <button type="button" className="text-button" disabled={working || state.threadId !== null} onClick={() => run(async () => {
+            const path = await chooseFolder({ directory: true, multiple: false, title: "Allow repository reads" });
+            const current = chat.getSnapshot();
+            if (current.threadId !== null || current.phase === "starting" || current.phase === "running") throw new Error("Start a new chat before changing repository access.");
+            if (typeof path === "string") setRepositories((current) => current.includes(path) ? current : [...current, path]);
+          })}>Allow repository…</button>
+          <p>Only selected folders can be read. Start a new chat to change access.</p>
           <p>Sign in from a terminal with <code>codex login</code>.</p>
         </details>
         {state.phase === "ready"
           ? <button className="text-button" onClick={() => run(() => chat.disconnect())}>End session</button>
-          : <button className="text-button" disabled={working || state.allowed.length === 0} onClick={() => run(() => chat.connect(executable))}>{state.threadId ? "Resume session" : "Start session"}</button>}
+          : <button className="text-button" disabled={working || state.allowed.length === 0} onClick={() => run(() => chat.connect(executable, repositories))}>{state.threadId ? "Resume session" : "Start session"}</button>}
       </footer>
     </aside>
   );

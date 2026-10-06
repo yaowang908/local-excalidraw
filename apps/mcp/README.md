@@ -32,6 +32,13 @@ shell's `nvm` setup. Update that path if you remove the selected Node installati
 It waits for MCP messages on stdin. Only protocol messages go to stdout; errors
 go to stderr. Rebuild with `npm run build:mcp` after changing native sources.
 
+The repository's `plugins/local-excalidraw` package contains skills only. Configure
+the MCP server locally with the command above before using those skills; installing
+the plugin does not start a server or select a drawing folder. Keep each user's
+Node executable, source checkout, and drawing workspace paths in their local Codex
+configuration rather than committing them to the plugin. The skills verify the
+connected server's workspace before editing. A cloud-synced folder is optional.
+
 The filesystem binary lives at `packages/filesystem/target/release/excalidraw-fs`.
 The server resolves it relative to its own source, so it works from any working
 directory. Both it and the desktop use `packages/filesystem`, including the same

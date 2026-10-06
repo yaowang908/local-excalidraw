@@ -32,6 +32,19 @@ npm run test:e2e
 
 Browser and viewer tests need localhost listeners. Rust tests exercise the native filesystem, macOS coordination, recovery, and viewer lifecycle; browser tests run the real editor with a simulated native IPC boundary.
 
+The repository read-allowlist integration test runs real shell commands through
+an installed Codex CLI, without calling a model. Run it separately:
+
+```sh
+LOCAL_EXCALIDRAW_TEST_CODEX=/absolute/path/to/codex \
+  cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml \
+  installed_cli_enforces_the_repository_read_allowlist -- --ignored
+```
+
+The README screenshot uses sample drawings with sharing disabled. Regenerate it
+with `npm run test:e2e -- --grep 'captures the README sample'`, inspect
+`output/playwright/readme-sample.png`, then copy it to `docs/assets/workspace.png`.
+
 ## Release process
 
 1. Prepare a PR with the changes, documentation, and next version. Keep the root and workspace package versions, local model dependency versions, Tauri app version, and plugin version aligned. Regenerate the npm lockfile after updating package metadata.

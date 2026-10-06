@@ -142,7 +142,7 @@ export class CodexChat {
   }
 
   /** Start the installed CLI, or resume this panel's previous conversation. */
-  async connect(executablePath: string): Promise<void> {
+  async connect(executablePath: string, repositories: string[] = []): Promise<void> {
     if (this.sessionId || this.commandPending) return;
     if (!this.snapshot.allowed.length) throw new Error("Allow a drawing before starting Codex.");
     this.commandPending = true;
@@ -151,7 +151,7 @@ export class CodexChat {
       if (!this.unlisten) this.unlisten = await this.transport.listen((event) => this.receive(event));
       if (this.disposed) { this.unlisten(); return; }
       const result = await this.transport.invoke<{ sessionId: string; threadId: string; turns: unknown }>("codex_start", {
-        root: this.root, paths: this.snapshot.allowed, tools: toolSpecs,
+        root: this.root, paths: this.snapshot.allowed, repositories, tools: toolSpecs,
         executablePath: executablePath.trim() || null, threadId: this.snapshot.threadId,
       });
       if (this.disposed) {

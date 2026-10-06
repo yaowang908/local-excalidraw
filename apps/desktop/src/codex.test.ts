@@ -57,6 +57,13 @@ async function setup() {
 }
 
 describe("native Codex conversation", () => {
+  it("grants no repository by default and passes only explicitly selected roots", async () => {
+    const { chat, transport } = await setup();
+    expect(transport.requests.find((request) => request.command === "codex_start")?.args.repositories).toEqual([]);
+    await chat.disconnect();
+    await chat.connect("", ["/selected-repository"]);
+    expect(transport.requests.filter((request) => request.command === "codex_start").at(-1)?.args.repositories).toEqual(["/selected-repository"]);
+  });
   it("streams messages and uses the completed item as the final text", async () => {
     const { chat, transport } = await setup();
     await chat.send("Add a box", "a.excalidraw");
