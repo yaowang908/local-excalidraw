@@ -19,6 +19,7 @@ import {
   FolderPlus,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightOpen,
   RefreshCw,
   Save,
   X,
@@ -36,6 +37,8 @@ import {
 } from "./filesystem";
 import { FileTree } from "./FileTree";
 import { Prompt, type PromptOptions } from "./Prompt";
+import { CodexChat } from "./codex";
+import { CodexPanel } from "./CodexPanel";
 
 type Session = { fs: NativeFs; documents: Documents };
 type WorkspaceRoute = { kind: "current" | "focused" | "new"; root: string };
@@ -76,6 +79,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [starting, setStarting] = useState(true);
   const [sidebar, setSidebar] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chat, setChat] = useState<CodexChat | null>(null);
   const [menu, setMenu] = useState<{
     entry: FileEntry;
     x: number;
@@ -100,6 +105,8 @@ export function App() {
     session?.documents.getSnapshot ?? (() => emptyDocuments.current),
   );
   const document = documents.find((doc) => doc.path === active);
+
+  useEffect(() => () => chat?.dispose(), [chat]);
 
   const run = useCallback((action: () => Promise<unknown>) => {
     void action().catch((reason) => setError(errorMessage(reason)));
@@ -218,6 +225,8 @@ export function App() {
         currentSession.current = next;
         apis.current.clear();
         setSession(next);
+        setChat(null);
+        setChatOpen(false);
         setActive(null);
         setEntries([]);
         setExpandedFolders(new Set());
@@ -731,6 +740,19 @@ export function App() {
             <span>New drawing</span>
             <kbd>⌘N</kbd>
           </button>
+          <button
+            className="toolbar-action"
+            aria-label="Toggle Codex panel"
+            aria-expanded={chatOpen}
+            disabled={!session || busy}
+            onClick={() => {
+              if (!chat && session) setChat(new CodexChat(session.fs.root, session.documents, active));
+              setChatOpen((open) => !open);
+            }}
+          >
+            <PanelRightOpen size={16} />
+            <span>Codex</span>
+          </button>
         </div>
       </header>
       {error && (
@@ -1078,6 +1100,13 @@ export function App() {
             </div>
           </footer>
         </main>
+        {chat && <CodexPanel
+          chat={chat}
+          open={chatOpen}
+          activePath={active}
+          openPaths={documents.map((doc) => doc.path)}
+          onClose={() => setChatOpen(false)}
+        />}
       </div>
       {menu && (
         <>

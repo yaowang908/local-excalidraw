@@ -26,6 +26,8 @@ declare global {
       embedBase: string;
       embedError: string | null;
       external: (path: string, scene: TestScene) => void;
+      codexRequests: { command: string; args: Record<string, unknown> }[];
+      codexEvent: (message: Record<string, unknown>) => void;
     };
   }
 }
@@ -83,6 +85,8 @@ test.beforeEach(async ({ page }) => {
     }>();
     const callbacks = new Map<number, (payload: unknown) => void>();
     const listeners = new Map<string, number[]>();
+    const codexRequests: { command: string; args: Record<string, unknown> }[] = [];
+    const codexTools = new Map<number, { path: string }>();
     let callbackId = 0;
     const hash = (content: string) => content;
     const snapshot = (path: string) => {
@@ -129,6 +133,15 @@ test.beforeEach(async ({ page }) => {
         files[path] = JSON.stringify(value);
         emit();
       },
+      codexRequests,
+      codexEvent: (message) => {
+        if (message.method === "item/tool/call") {
+          const params = message.params as { arguments: { path: string } };
+          codexTools.set(Number(message.id), { path: params.arguments.path });
+        }
+        for (const id of listeners.get("codex-event") ?? [])
+          callbacks.get(id)?.({ event: "codex-event", payload: { sessionId: "codex-session", message } });
+      },
     };
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       value: {
@@ -143,6 +156,18 @@ test.beforeEach(async ({ page }) => {
         },
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
           const path = String(args.path ?? "");
+          if (command.startsWith("codex_")) {
+            codexRequests.push({ command, args });
+            if (command === "codex_start") return { sessionId: "codex-session", threadId: "codex-thread", turns: [] };
+            if (command === "codex_read_tool") return snapshot(codexTools.get(Number(args.requestId))?.path ?? "");
+            if (command === "codex_write_tool") {
+              const target = codexTools.get(Number(args.requestId))?.path ?? "";
+              files[target] = String(args.content);
+              emit();
+              return snapshot(target);
+            }
+            return;
+          }
           if (command === "load_preferences")
             return {
               workspacePath: "/workspace",
@@ -617,4 +642,91 @@ test("creates, renames, moves, and trashes drawings through reviewable dialogs",
   await expect(
     page.getByRole("tab", { name: "renamed", exact: true }),
   ).toBeHidden();
+});
+
+test("collapses and resizes the Codex panel without losing its session or draft", async ({ page }) => {
+  await openApi(page);
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  const panel = page.getByRole("complementary", { name: "Codex chat" });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTitle("architecture/api.excalidraw")).toBeVisible();
+  await panel.getByRole("button", { name: "Start session", exact: true }).click();
+  await expect(panel.getByText("Connected", { exact: true })).toBeVisible();
+  await panel.getByLabel("Message Codex").fill("Draft remains here");
+  const before = await panel.boundingBox();
+  await panel.getByRole("separator", { name: "Resize Codex panel" }).focus();
+  await page.keyboard.press("ArrowLeft");
+  const after = await panel.boundingBox();
+  expect(after?.width).toBe((before?.width ?? 0) + 20);
+  await panel.getByRole("button", { name: "Collapse Codex panel" }).click();
+  await expect(panel).toBeHidden();
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  await expect(panel.getByLabel("Message Codex")).toHaveValue("Draft remains here");
+  expect(await page.evaluate(() => window.testWorkspace.codexRequests.filter((request) => request.command === "codex_start").length)).toBe(1);
+  await page.screenshot({ path: "output/playwright/codex-panel.png" });
+});
+
+test("pins the sent drawing target and applies an agent edit while the panel is collapsed", async ({ page }) => {
+  await openApi(page);
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  const panel = page.getByRole("complementary", { name: "Codex chat" });
+  await panel.getByLabel("Message Codex").fill("Add a worker node");
+  await panel.getByRole("button", { name: "Send message" }).click();
+  await expect(panel.getByText("Working", { exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Collapse Codex panel" }).click();
+  await page.getByRole("button", { name: "scratch", exact: true }).click();
+  await page.evaluate(() => window.testWorkspace.codexEvent({
+    id: 7, method: "item/tool/call", params: {
+      threadId: "codex-thread", turnId: "turn", tool: "edit_diagram", arguments: {
+        path: "architecture/api.excalidraw", expectedHash: window.testWorkspace.files["architecture/api.excalidraw"],
+        operations: [{ op: "add", element: { id: "worker", type: "rectangle", x: 500, y: 200, text: "Worker" } }],
+      },
+    },
+  }));
+  await expect.poll(() => page.evaluate(() => JSON.parse(window.testWorkspace.files["architecture/api.excalidraw"] ?? "{}").elements.some((element: { id: string }) => element.id === "worker"))).toBe(true);
+  await page.evaluate(() => {
+    window.testWorkspace.codexEvent({ method: "item/agentMessage/delta", params: { threadId: "codex-thread", itemId: "answer", delta: "Added the worker node." } });
+    window.testWorkspace.codexEvent({ method: "turn/completed", params: { threadId: "codex-thread", turn: { status: "completed" } } });
+  });
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  await expect(panel.getByText("Added the worker node.")).toBeVisible();
+  await expect(panel.locator(".codex-message-user header")).toContainText("architecture/api.excalidraw");
+  await expect(panel.getByRole("button", { name: "Allow drawing", exact: true })).toBeEnabled();
+  await panel.getByRole("button", { name: "Allow drawing", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Revoke access to scratch.excalidraw" })).toBeVisible();
+  await page.getByRole("tab", { name: "api", exact: true }).click();
+  await expect(page.getByRole("region", { name: "File conflict" })).toBeHidden();
+  const requests = await page.evaluate(() => window.testWorkspace.codexRequests);
+  expect(requests.find((request) => request.command === "codex_send")?.args.target).toBe("architecture/api.excalidraw");
+  expect(requests.filter((request) => request.command === "codex_write_tool")).toHaveLength(1);
+  await page.screenshot({ path: "output/playwright/codex-edited.png" });
+});
+
+test("requires drawing access and supports ending and resuming the local session", async ({ page }) => {
+  await openApi(page);
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  const panel = page.getByRole("complementary", { name: "Codex chat" });
+  await panel.getByRole("button", { name: "Revoke access to architecture/api.excalidraw" }).click();
+  await expect(panel.getByRole("button", { name: "Start session", exact: true })).toBeDisabled();
+  await panel.getByRole("button", { name: "Allow drawing", exact: true }).click();
+  await panel.getByRole("button", { name: "Start session", exact: true }).click();
+  await panel.getByRole("button", { name: "End session", exact: true }).click();
+  await panel.getByRole("button", { name: "Resume session", exact: true }).click();
+  await expect(panel.getByText("Connected", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.testWorkspace.codexRequests.filter((request) => request.command === "codex_start").at(-1)?.args.threadId)).toBe("codex-thread");
+});
+
+test("preserves an unsent Codex draft when a drawing conflict blocks the turn", async ({ page }) => {
+  await openApi(page);
+  await drawRectangle(page);
+  await page.evaluate((scene) => window.testWorkspace.external("architecture/api.excalidraw", scene),
+    { ...initial, appState: { viewBackgroundColor: "#fff4e6" } });
+  await expect(page.getByRole("region", { name: "File conflict" })).toBeVisible();
+  await page.getByRole("button", { name: "Toggle Codex panel" }).click();
+  const panel = page.getByRole("complementary", { name: "Codex chat" });
+  await panel.getByLabel("Message Codex").fill("Keep this request");
+  await panel.getByRole("button", { name: "Send message" }).click();
+  await expect(panel.getByRole("alert")).toContainText("Resolve the conflict");
+  await expect(panel.getByLabel("Message Codex")).toHaveValue("Keep this request");
+  expect(await page.evaluate(() => window.testWorkspace.codexRequests.some((request) => request.command === "codex_send"))).toBe(false);
 });

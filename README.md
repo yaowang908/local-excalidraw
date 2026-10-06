@@ -25,6 +25,13 @@ You can also download the app from [GitHub Releases](https://github.com/yaowang9
 
 The app is ad-hoc signed but not notarized. If macOS blocks the first launch, open it once, then choose **Open Anyway** in **System Settings → Privacy & Security** if you trust the download. See [Apple’s guidance](https://support.apple.com/en-gb/102445).
 
+Alternatively, after extracting the download and moving **Local Excalidraw.app** to `/Applications`, use Terminal to clear its extended attributes and launch it if you trust the download:
+
+```sh
+xattr -cr "/Applications/Local Excalidraw.app"
+open "/Applications/Local Excalidraw.app"
+```
+
 ## Get started
 
 Open a workspace folder, select a drawing, or choose **New drawing**. Changes save automatically. The status **Saved locally** confirms a local save; your cloud provider handles syncing.
