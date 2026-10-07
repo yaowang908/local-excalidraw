@@ -12,7 +12,7 @@
     "dev": "npm run dev --workspace @local-excalidraw/desktop",
     "desktop": "npm run tauri --workspace @local-excalidraw/desktop -- dev",
     "build": "npm run build --workspace @local-excalidraw/desktop",
-    "bundle": "npm run tauri --workspace @local-excalidraw/desktop -- build --bundles app",
+    "bundle": "npm run tauri --workspace @local-excalidraw/desktop -- build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:rust": "cargo test --manifest-path packages/filesystem/Cargo.toml && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",

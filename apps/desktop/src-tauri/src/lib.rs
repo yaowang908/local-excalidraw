@@ -601,15 +601,34 @@ async fn reveal_entry(
                 Some(path) => fs.resolve(&path, false)?,
                 None => fs.root.clone(),
             };
+            #[cfg(target_os = "macos")]
             let status = std::process::Command::new("open")
                 .arg("-R")
-                .arg(target)
+                .arg(&target)
                 .status()
                 .map_err(|e| WorkspaceError::new("io", format!("Cannot open Finder: {e}")))?;
+            #[cfg(target_os = "linux")]
+            let status = {
+                let reveal_path = if target.is_file() {
+                    target.parent().unwrap_or(&target).to_path_buf()
+                } else {
+                    target
+                };
+                std::process::Command::new("xdg-open")
+                    .arg(&reveal_path)
+                    .status()
+                    .map_err(|e| WorkspaceError::new("io", format!("Cannot open file manager: {e}")))?
+            };
+            #[cfg(target_os = "windows")]
+            let status = std::process::Command::new("explorer.exe")
+                .arg("/select,")
+                .arg(&target)
+                .status()
+                .map_err(|e| WorkspaceError::new("io", format!("Cannot open Explorer: {e}")))?;
             if !status.success() {
                 return Err(WorkspaceError::new(
                     "io",
-                    "Finder could not reveal this entry",
+                    "File manager could not reveal this entry",
                 ));
             }
             Ok(())
