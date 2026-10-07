@@ -15,9 +15,11 @@ class Transport implements CodexTransport {
   disk = { ...initial };
   unlisten = vi.fn();
   fail: string | null = null;
+  onSend: (() => void) | null = null;
   async listen(handler: (event: unknown) => void): Promise<() => void> { this.handler = handler; return this.unlisten; }
   async invoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
     this.requests.push({ command, args });
+    if (command === "codex_send") this.onSend?.();
     if (this.fail === command) throw new Error(`${command} failed`);
     let value: unknown;
     if (command === "codex_start") value = { sessionId: "session", threadId: "thread", turns: [] };
@@ -143,5 +145,29 @@ describe("native Codex conversation", () => {
     await expect(chat.send("Edit", "a.excalidraw")).rejects.toThrow("failed");
     expect(transport.requests.filter((request) => request.command === "codex_send")).toHaveLength(1);
     expect(chat.getSnapshot()).toMatchObject({ phase: "ready", error: "codex_send failed" });
+    expect(chat.getSnapshot().entries).toEqual([]);
+    transport.fail = null;
+    await chat.send("Edit", "a.excalidraw");
+    expect(chat.getSnapshot().entries).toMatchObject([{ role: "user", text: "Edit", target: "a.excalidraw" }]);
+    expect(chat.getSnapshot().entries).toHaveLength(1);
+  });
+  it("keeps the user message before events arriving during turn startup", async () => {
+    const { chat, transport } = await setup();
+    transport.onSend = () => transport.emit("item/agentMessage/delta", { itemId: "answer", delta: "Working" });
+    await chat.send("Edit", "a.excalidraw");
+    expect(chat.getSnapshot().entries).toMatchObject([
+      { role: "user", text: "Edit" }, { role: "assistant", text: "Working" },
+    ]);
+  });
+  it("removes only the rejected message and preserves disconnection and history", async () => {
+    const { chat, transport } = await setup();
+    await chat.send("First", "a.excalidraw");
+    transport.emit("turn/completed", { turn: { status: "completed" } });
+    transport.onSend = () => transport.emit("local/disconnected", {});
+    transport.fail = "codex_send";
+    await expect(chat.send("Second", "a.excalidraw")).rejects.toThrow("failed");
+    expect(chat.getSnapshot().phase).toBe("disconnected");
+    expect(chat.getSnapshot().entries).toMatchObject([{ role: "user", text: "First" }]);
+    expect(chat.getSnapshot().entries).toHaveLength(1);
   });
 });

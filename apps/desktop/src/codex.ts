@@ -179,13 +179,15 @@ export class CodexChat {
     if (!text.trim()) throw new Error("Enter a message.");
     if (!this.snapshot.allowed.includes(target)) throw new Error("Allow the target drawing before sending.");
     const sessionId = this.sessionId;
+    const entryId = `user-${++this.sequence}`;
     this.commandPending = true;
     this.patch({ phase: "running", error: null });
     try {
       await this.documents.prepareAgentRead(target);
-      this.entry({ id: `user-${++this.sequence}`, role: "user", text, target });
+      this.entry({ id: entryId, role: "user", text, target });
       await this.transport.invoke("codex_send", { sessionId, target, text });
     } catch (error) {
+      this.patch({ entries: this.snapshot.entries.filter((entry) => entry.id !== entryId) });
       if (this.getSnapshot().phase !== "disconnected") this.patch({ phase: "ready" });
       this.reportError(error);
       throw error;
