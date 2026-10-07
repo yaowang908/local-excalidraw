@@ -1,4 +1,4 @@
-name: Release macOS app
+name: Release
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build-macos:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -35,18 +35,74 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           app="apps/desktop/src-tauri/target/release/bundle/macos/Local Excalidraw.app"
-          archive="$RUNNER_TEMP/Local-Excalidraw-v${version}.zip"
+          archive="Local-Excalidraw-v${version}-macos-arm64.zip"
           test -d "$app"
           codesign --force --deep --sign - --timestamp=none "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
-          echo "RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle
+          path: Local-Excalidraw-*.zip
+          retention-days: 1
+
+  build-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Build Linux bundles
+        run: |
+          npm ci
+          npm run bundle
+
+      - name: Prepare artifacts
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          bundle_dir="apps/desktop/src-tauri/target/release/bundle"
+          mkdir -p artifacts
+          cp "$bundle_dir/appimage/"*.AppImage "artifacts/Local-Excalidraw-v${version}-linux-x86_64.AppImage"
+          cp "$bundle_dir/deb/"*.deb "artifacts/local-excalidraw_${version}_amd64.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundle
+          path: artifacts/*
+          retention-days: 1
+
+  release:
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-bundle
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-bundle
+          path: release
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          gh release create "$GITHUB_REF_NAME" "$RELEASE_ARCHIVE" \
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Local Excalidraw $version" \
             --generate-notes
