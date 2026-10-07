@@ -1,6 +1,6 @@
 # Local Excalidraw
 
-A macOS app for editing and organizing ordinary `.excalidraw` files. Your drawings stay in folders you choose. No account or hosted backend is required.
+A desktop app for editing and organizing ordinary `.excalidraw` files. Your drawings stay in folders you choose. No account or hosted backend is required. Available for macOS and Linux.
 
 
 ## Features
@@ -15,6 +15,8 @@ A macOS app for editing and organizing ordinary `.excalidraw` files. Your drawin
 
 ## Install
 
+### macOS
+
 Requires an Apple Silicon Mac running macOS 12 or later.
 
 ```sh
@@ -23,7 +25,22 @@ brew install --cask yaowang908/tap/local-excalidraw
 
 You can also download the app from [GitHub Releases](https://github.com/yaowang908/local-excalidraw/releases).
 
-The app is ad-hoc signed but not notarized. If macOS blocks the first launch, open it once, then choose **Open Anyway** in **System Settings → Privacy & Security** if you trust the download. See [Apple’s guidance](https://support.apple.com/en-gb/102445).
+The app is ad-hoc signed but not notarized. If macOS blocks the first launch, open it once, then choose **Open Anyway** in **System Settings → Privacy & Security** if you trust the download. See [Apple's guidance](https://support.apple.com/en-gb/102445).
+
+### Linux
+
+Download the AppImage or .deb package from [GitHub Releases](https://github.com/yaowang908/local-excalidraw/releases).
+
+For AppImage:
+```sh
+chmod +x Local-Excalidraw-*.AppImage
+./Local-Excalidraw-*.AppImage
+```
+
+For Debian/Ubuntu:
+```sh
+sudo apt install ./local-excalidraw_*_amd64.deb
+```
 
 ## Get started
 
