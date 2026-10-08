@@ -30,8 +30,8 @@
     "shortDescription": "A local workspace for Excalidraw drawings",
     "macOS": { "minimumSystemVersion": "12.0" },
     "linux": {
-      "appimage": { "bundleMediaFramework": false },
-      "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"] }
+      "appimage": { "bundleMediaFramework": true },
+      "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good"] }
     },
     "icon": ["icons/icon.png", "icons/icon.icns"]
   }

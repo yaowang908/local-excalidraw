@@ -28,8 +28,11 @@ Install Tauri dependencies:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly gstreamer1.0-libav patchelf
 ```
+
+The GStreamer and patchelf packages are required for bundling the AppImage with media framework support (YouTube embeds). The AppImage bundles GStreamer so it plays embedded media without requiring host libraries.
 
 Build and run:
 
