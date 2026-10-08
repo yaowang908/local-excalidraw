@@ -3,11 +3,13 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/client";
@@ -36,7 +38,7 @@ async function connect() {
     new StdioClientTransport({
       command: process.execPath,
       args: [entrypoint, "--workspace", root],
-      cwd: "/private/tmp",
+      cwd: tmpdir(),
     }),
   );
   return client;
@@ -70,7 +72,7 @@ async function create() {
 }
 
 beforeEach(async () => {
-  root = await mkdtemp("/private/tmp/excalidraw-mcp-test-");
+  root = await realpath(await mkdtemp(join(tmpdir(), "excalidraw-mcp-test-")));
   fs = new WorkspaceFs(root);
   client = await connect();
 });
@@ -286,7 +288,7 @@ describe("real stdio MCP and native filesystem", () => {
   });
 
   it("rejects traversal, absolute paths, hidden files, symlinks, and malformed arguments", async () => {
-    const outside = await mkdtemp("/private/tmp/excalidraw-outside-");
+    const outside = await realpath(await mkdtemp(join(tmpdir(), "excalidraw-outside-")));
     try {
       await symlink(outside, join(root, "linked"));
       for (const path of [

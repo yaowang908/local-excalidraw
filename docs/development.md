@@ -46,8 +46,8 @@ To build Linux packages (AppImage and .deb):
 ```sh
 npm run bundle
 # Output:
-#   apps/desktop/src-tauri/target/release/bundle/appimage/local-excalidraw_*.AppImage
-#   apps/desktop/src-tauri/target/release/bundle/deb/local-excalidraw_*.deb
+#   apps/desktop/src-tauri/target/release/bundle/appimage/Local Excalidraw_<version>_amd64.AppImage
+#   apps/desktop/src-tauri/target/release/bundle/deb/local-excalidraw_<version>_amd64.deb
 ```
 
 For MCP setup, build the native helper with `npm run build:mcp` and the browser viewer with `npm run build`. See [the MCP guide](../apps/mcp/README.md).

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, writeFile, rm } from "node:fs/promises";
 import { get } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyScene } from "@local-excalidraw/model";
 import { WorkspaceFs } from "./filesystem.ts";
@@ -11,7 +12,7 @@ let assets: string;
 let fs: WorkspaceFs;
 let viewer: DiagramViewer;
 beforeEach(async () => {
-  root = await mkdtemp("/private/tmp/excalidraw-preview-test-");
+  root = await realpath(await mkdtemp(join(tmpdir(), "excalidraw-preview-test-")));
   assets = join(root, "web");
   await mkdir(join(assets, "assets"), { recursive: true });
   await writeFile(join(assets, "index.html"), '<script src="/assets/main.js"></script>');

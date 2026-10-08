@@ -23,6 +23,13 @@ import {
   Save,
   X,
 } from "lucide-react";
+import {
+  folderChooserPrompt,
+  modifierKey,
+  revealLabel,
+  shiftModifierKey,
+  trashDescription,
+} from "./platform";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { emptyScene } from "@local-excalidraw/model";
 import { Canvas } from "./Canvas";
@@ -539,10 +546,7 @@ export function App() {
     setMenu(null);
     setPrompt({
       title: `Move ${entry.name} to Trash?`,
-      description:
-        entry.kind === "folder"
-          ? "The folder and all its contents will be moved to the macOS Trash."
-          : "You can restore this drawing from the macOS Trash.",
+      description: trashDescription(entry.kind === "folder"),
       submit: "Move to Trash",
       danger: true,
       action: async () => {
@@ -702,10 +706,10 @@ export function App() {
               />
               <div className="context-menu workspace-menu">
                 <button onClick={() => run(chooseWorkspace)}>
-                  Open workspace in window…<kbd>⌘O</kbd>
+                  Open workspace in window…<kbd>{modifierKey()}O</kbd>
                 </button>
                 <button onClick={() => run(chooseFile)}>
-                  Open drawing…<kbd>⇧⌘O</kbd>
+                  Open drawing…<kbd>{shiftModifierKey()}O</kbd>
                 </button>
                 <button
                   onClick={() => {
@@ -713,7 +717,7 @@ export function App() {
                     setWorkspaceMenu(false);
                   }}
                 >
-                  Reveal in Finder
+                  {revealLabel()}
                 </button>
               </div>
             </>
@@ -729,7 +733,7 @@ export function App() {
           >
             <FilePlus2 size={16} />
             <span>New drawing</span>
-            <kbd>⌘N</kbd>
+            <kbd>{modifierKey()}N</kbd>
           </button>
         </div>
       </header>
@@ -760,7 +764,7 @@ export function App() {
               <div>
                 <button
                   className="icon-button"
-                  title="New folder (⇧⌘N)"
+                  title={`New folder (${shiftModifierKey()}N)`}
                   aria-label="New folder"
                   disabled={!session}
                   onClick={() => newEntry("folder")}
@@ -1004,7 +1008,7 @@ export function App() {
                       ? openingError.message
                       : session
                       ? "Open a drawing from the sidebar, or start a new one."
-                      : "Choose a folder on your Mac. Drawings stay as ordinary .excalidraw files, ready for any compatible editor."}
+                      : folderChooserPrompt()}
                   </p>
                   {openingError?.path === active && session && active ? (
                     <button className="primary-button" onClick={() => run(() => openFile({ name: basename(active), path: active, kind: "drawing", children: [] }))}>Retry opening</button>
@@ -1021,7 +1025,7 @@ export function App() {
                       <FolderOpen size={16} />
                     )}
                     {session ? "New drawing" : "Open workspace"}
-                    <kbd>{session ? "⌘N" : "⌘O"}</kbd>
+                    <kbd>{session ? `${modifierKey()}N` : `${modifierKey()}O`}</kbd>
                   </button>}
                   {!isTauri() && (
                     <p className="browser-note">
@@ -1135,7 +1139,7 @@ export function App() {
                 setMenu(null);
               }}
             >
-              Reveal in Finder
+              {revealLabel()}
               <ArrowUpRight size={14} />
             </button>
             <hr />
