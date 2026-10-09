@@ -1,13 +1,13 @@
 ---
 name: sync-tldraw-to-excalidraw
-description: Sync selected tldraw board pages into editable .excalidraw files in the user’s OneDrive Excalidraw folder, then display them in Local Excalidraw. Use for importing or refreshing local copies of tldraw pages; this is an on-demand, one-way sync.
+description: Sync selected tldraw board pages into editable .excalidraw files in a user-selected drawing folder, then display them in Local Excalidraw. Use for importing or refreshing local copies of tldraw pages; this is an on-demand, one-way sync.
 ---
 
 # Sync tldraw to Excalidraw
 
-Copy the requested tldraw pages into `/absolute/path/to/drawings`, one drawing per page. Default to all pages of the explicitly selected board, or the sole open board if no board was specified. Ask for a board when multiple candidates remain. Do not interpret “sync” as permission to modify tldraw, delete local drawings, sync every accessible board, or create a recurring automation.
+Copy the requested tldraw pages into the drawing folder selected by the user, one drawing per page. Resolve that folder using the companion skill; ask when the destination is unknown or differs from the connected MCP workspace. Default to all pages of the explicitly selected board, or the sole open board if no board was specified. Ask for a board when multiple candidates remain. Do not interpret “sync” as permission to modify tldraw, delete local drawings, sync every accessible board, or create a recurring automation.
 
-Use the tldraw plugin for source reads. Load [edit-local-excalidraw](../edit-local-excalidraw/SKILL.md) for destination MCP access, OneDrive handling, hash-protected saves, and desktop display. The source checkout `/absolute/path/to/Local-exclidraw` supplies the MCP implementation, not the output folder. Creating this skill does not itself run a sync.
+Use the tldraw plugin for source reads. Load [edit-local-excalidraw](../edit-local-excalidraw/SKILL.md) for destination MCP access, cloud-file handling, hash-protected saves, and desktop display. A verified source checkout supplies the MCP implementation, not the output folder; resolve it from the current repository or a user-supplied path when needed. Creating this skill does not itself run a sync.
 
 ## Read the source
 
@@ -67,6 +67,6 @@ Before each page write, stage a pending receipt with the previous destination ha
 
 Create a new drawing with `create_diagram`, or update an unchanged local baseline using one `save_diagram` batch with `expectedHash`. Re-read the saved drawing and verify the intended result before atomically finalizing its receipt. On an uncertain response or interrupted run, inspect pending state and the actual drawing: if the prior hash remains, the write did not take effect; if the intended result is verifiably present, complete its receipt; otherwise preserve the file and report a conflict. Do not blindly retry adds, declare success from a pending record, or overwrite a changed baseline.
 
-Each page commits independently. A crash can leave earlier pages complete and later pages pending; reruns reconcile receipts and continue without duplicating imports. Source edits during export can require a fresh read; there is no transaction spanning tldraw, multiple local files, the manifest, and OneDrive. Uncooperative writers or OneDrive can race local locks. Local verification confirms local persistence, not cloud upload or synchronization to another device.
+Each page commits independently. A crash can leave earlier pages complete and later pages pending; reruns reconcile receipts and continue without duplicating imports. Source edits during export can require a fresh read; there is no transaction spanning tldraw, multiple local files, the manifest, and the cloud provider. Uncooperative writers or cloud sync can race local locks. Local verification confirms local persistence, not cloud upload or synchronization to another device.
 
-Open the OneDrive workspace and select a synced drawing in Local Excalidraw using the companion skill. For multi-page imports, verify each saved page's content and inspect its canvas, leaving the requested or first synced page visible. Compare with tldraw's page screenshot when useful; never change source content merely to obtain a preview. Finish with created/updated/unchanged/conflicted/unsupported counts, links to synced files, and material conversion limitations. Distinguish file verification from unverified desktop display.
+Open the chosen drawing workspace and select a synced drawing in Local Excalidraw using the companion skill. For multi-page imports, verify each saved page's content and inspect its canvas, leaving the requested or first synced page visible. Compare with tldraw's page screenshot when useful; never change source content merely to obtain a preview. Finish with created/updated/unchanged/conflicted/unsupported counts, links to synced files, and material conversion limitations. Distinguish file verification from unverified desktop display.

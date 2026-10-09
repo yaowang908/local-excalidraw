@@ -4,11 +4,10 @@
   "description": "Create, edit, and preview local Excalidraw drawings in Codex.",
   "author": { "name": "Yao Wang" },
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Local Excalidraw",
     "shortDescription": "Edit and preview local Excalidraw drawings",
-    "longDescription": "Work with drawings in your OneDrive Excalidraw folder and display saved changes in Codex’s browser side panel. Runs locally using the Local Excalidraw source checkout.",
+    "longDescription": "Work with drawings in a folder you choose and display saved changes in Codex’s browser side panel. Requires a separately configured local Local Excalidraw MCP server.",
     "developerName": "Yao Wang",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],

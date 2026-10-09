@@ -1,0 +1,81 @@
+.codex-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 300px;
+  max-width: min(620px, calc(100vw - 300px));
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.codex-panel[hidden] { display: none; }
+.codex-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+}
+.codex-resizer:hover,
+.codex-resizer:focus-visible { background: var(--accent); }
+.codex-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 45px;
+  padding: 0 12px 0 18px;
+  border-bottom: 1px solid var(--border);
+}
+.codex-heading strong { font-size: 14px; font-weight: 600; }
+.codex-heading > span { color: var(--muted); font-size: 11px; }
+.codex-heading > button { margin-left: auto; }
+.codex-access { padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.codex-access-heading { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.codex-access ul { margin: 8px 0 0; padding: 0; list-style: none; max-height: 112px; overflow: auto; }
+.codex-access li { display: flex; align-items: center; gap: 8px; }
+.codex-access li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
+.codex-access p { margin: 9px 0 0; color: var(--muted); font-size: 12px; }
+.codex-add-drawing { display: flex; gap: 6px; margin-top: 8px; }
+.codex-panel select,
+.codex-panel textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.codex-panel select { min-width: 0; padding: 5px 7px; width: 100%; text-overflow: ellipsis; }
+.codex-panel select:focus-visible,
+.codex-panel textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.codex-transcript { flex: 1; min-height: 0; overflow: auto; padding: 22px 18px; overflow-wrap: anywhere; }
+.codex-empty { max-width: 280px; }
+.codex-empty p { margin: 0 0 16px; line-height: 1.6; color: var(--muted); font-size: 12px; }
+.codex-empty p:first-child { font-size: 16px; color: var(--text); line-height: 1.45; }
+.codex-message { margin-bottom: 24px; }
+.codex-message header { display: flex; align-items: baseline; gap: 9px; margin-bottom: 7px; font-size: 12px; }
+.codex-message header strong { font-weight: 600; }
+.codex-message header span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+.codex-message > div { white-space: pre-wrap; line-height: 1.6; }
+.codex-message-user > div { padding: 10px 12px; background: var(--surface); border-radius: 5px; }
+.codex-activity { margin: 8px 0 16px; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.codex-error { margin: 0 18px 12px; color: var(--danger); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; max-height: 130px; overflow: auto; }
+.codex-composer { margin: 0 14px 12px; }
+.codex-target { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+.codex-target > span { color: var(--muted); font-size: 11px; }
+.codex-target select { font-size: 11px; }
+.codex-composer textarea { display: block; width: 100%; resize: vertical; min-height: 72px; max-height: 200px; padding: 10px 12px; line-height: 1.5; }
+.codex-composer textarea::placeholder { color: var(--muted); }
+.codex-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.codex-composer-actions > span { color: var(--muted); font-size: 10px; }
+.codex-composer-actions > button { padding: 5px 7px; }
+.codex-footer { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 11px 18px; border-top: 1px solid var(--border); font-size: 11px; }
+.codex-footer details { min-width: 0; flex: 1; }
+.codex-footer summary { cursor: pointer; color: var(--muted); }
+.codex-footer label { display: block; margin-top: 12px; }
+.codex-footer input { margin-top: 6px; width: 100%; min-width: 0; }
+.codex-footer p { line-height: 1.5; color: var(--muted); }
+.codex-footer .text-button { flex-shrink: 0; font-size: 11px; }

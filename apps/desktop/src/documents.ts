@@ -289,6 +289,59 @@ export class Documents {
     }
   }
 
+  /** Flush the chosen drawing before giving the agent a saved revision. */
+  async prepareAgentRead(path: string): Promise<void> {
+    if (this.disposed) throw new Error("The workspace has closed.");
+    await this.drain(path);
+  }
+
+  /** Commit an agent revision without erasing edits made while native I/O waits. */
+  async applyAgentEdit(
+    path: string,
+    expectedHash: string,
+    content: string,
+    write: () => Promise<DiskSnapshot>,
+  ): Promise<DiskSnapshot> {
+    if (this.disposed) throw new Error("The workspace has closed.");
+    parseScene(content);
+    const before = this.get(path);
+    if (this.pending.has(path) || before?.dirty || before?.conflict ||
+        (before && before.savedHash !== expectedHash))
+      throw new Error("The canvas changed since Codex read it. Read the drawing again before editing.");
+    this.clearTimer(path);
+    this.patch(path, { saving: true, error: null });
+    let saved: DiskSnapshot | undefined;
+    const operation = (async () => {
+      try {
+        saved = await write();
+        const current = this.get(path);
+        if (current && before && current.content === before.content) {
+          this.replace(path, saved, true);
+        } else if (current) {
+          // Both versions are meaningful. Keep the live canvas and let the
+          // existing conflict flow preserve it alongside the committed edit.
+          await this.captureConflict(path, saved);
+        }
+      } catch (error) {
+        if (hasCode(error, "conflict") || hasCode(error, "missing"))
+          await this.captureConflict(path);
+        else this.patch(path, { error: errorMessage(error) });
+        throw error;
+      } finally {
+        this.patch(path, { saving: false, waiting: false });
+      }
+    })();
+    this.pending.set(path, operation);
+    try {
+      await operation;
+      if (!saved) throw new Error("Codex save did not return a drawing revision.");
+      return saved;
+    } finally {
+      this.pending.delete(path);
+      this.schedule(path);
+    }
+  }
+
   private async captureConflict(path: string, knownDisk?: DiskSnapshot): Promise<void> {
     this.clearTimer(path);
     const current = this.get(path);

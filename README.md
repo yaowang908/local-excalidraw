@@ -2,6 +2,7 @@
 
 A desktop app for editing and organizing ordinary `.excalidraw` files. Your drawings stay in folders you choose. No account or hosted backend is required. Available for macOS and Linux.
 
+<img width="1360" height="900" alt="Local Excalidraw with a sample drawing and the Codex chat panel" src="docs/assets/workspace.png" />
 
 ## Features
 
@@ -40,6 +41,13 @@ chmod +x Local-Excalidraw-*.AppImage
 For Debian/Ubuntu:
 ```sh
 sudo apt install ./local-excalidraw_*_amd64.deb
+```
+
+Alternatively, after extracting the download and moving **Local Excalidraw.app** to `/Applications`, use Terminal to clear its extended attributes and launch it if you trust the download:
+
+```sh
+xattr -cr "/Applications/Local Excalidraw.app"
+open "/Applications/Local Excalidraw.app"
 ```
 
 ## Get started

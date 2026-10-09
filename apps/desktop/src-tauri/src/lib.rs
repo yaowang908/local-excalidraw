@@ -13,6 +13,7 @@ use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 mod embeds;
+mod codex;
 mod recovery;
 mod viewer_server;
 use recovery::{RecoveryRecord, RecoveryStore};
@@ -362,8 +363,10 @@ async fn open_workspace(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     viewer: tauri::State<'_, ViewerService>,
+    codex: tauri::State<'_, codex::CodexService>,
     path: String,
 ) -> Result<String> {
+    codex.stop_window(window.label())?;
     let label = window.label().to_string();
     let key = format!("open\0{path}");
     let opened = bounded_io(key, "unavailable", move || {
@@ -980,12 +983,14 @@ fn close_window(
     state: tauri::State<AppState>,
     viewer: tauri::State<ViewerService>,
     store: tauri::State<PreferencesStore>,
+    codex: tauri::State<codex::CodexService>,
     preserve_session: bool,
 ) -> Result<()> {
     if !preserve_session {
         remove_preferences(&app, &store, window.label())?;
     }
     viewer.remove_window(&state, window.label())?;
+    codex.stop_window(window.label())?;
     window
         .destroy()
         .map_err(|e| WorkspaceError::new("window", format!("Cannot close window: {e}")))?;
@@ -1073,6 +1078,7 @@ pub fn run() {
         .manage(ViewerService::default())
         .manage(PreferencesStore::default())
         .manage(RecoveryStore::default())
+        .manage(codex::CodexService::default())
         .manage(embeds::EmbedServer::start().expect("Cannot start YouTube player listener"))
         .setup(|app| {
             let mut saved = match read_preferences(app.handle()) {
@@ -1159,11 +1165,24 @@ pub fn run() {
             viewer_url,
             start_viewer,
             stop_viewer,
-            open_external_link
+            open_external_link,
+            codex::codex_start,
+            codex::codex_access,
+            codex::codex_send,
+            codex::codex_interrupt,
+            codex::codex_stop,
+            codex::codex_read_tool,
+            codex::codex_write_tool,
+            codex::codex_reply_tool
         ])
         .build(tauri::generate_context!())
         .expect("Cannot initialize Local Excalidraw");
     app.run(|app, event| {
+        if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } = &event {
+            if let Err(error) = app.state::<codex::CodexService>().stop_window(label) {
+                eprintln!("Cannot stop closed window's Codex session: {}", error.message);
+            }
+        }
         if let tauri::RunEvent::ExitRequested {
             api, code: None, ..
         } = event

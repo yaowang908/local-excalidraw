@@ -1,4 +1,4 @@
 interface:
   display_name: "Edit Local Excalidraw"
   short_description: "Edit drawings and display them in the local app"
-  default_prompt: "Use $edit-local-excalidraw to create or edit a drawing in my OneDrive Excalidraw folder and display it in Local Excalidraw."
+  default_prompt: "Use $edit-local-excalidraw to create or edit a drawing in my selected drawing folder and display it in Local Excalidraw."
