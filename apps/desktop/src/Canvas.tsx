@@ -27,6 +27,19 @@ export function Canvas({
   // The parent remounts only when disk reconciliation replaces this scene.
   const scene = useMemo(() => parseScene(document.content), []);
   const editor = useRef<ExcalidrawImperativeAPI | null>(null);
+  const fitWhenVisible = useRef(!active);
+  useEffect(() => {
+    if (!active || !fitWhenVisible.current) return;
+    let frame = requestAnimationFrame(() => {
+      // Hidden tabs have zero dimensions. Wait for the editor's resize observer
+      // before fitting an agent-updated scene on its first visible frame.
+      frame = requestAnimationFrame(() => {
+        editor.current?.scrollToContent(undefined, { fitToViewport: true, viewportZoomFactor: 0.9 });
+        fitWhenVisible.current = false;
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active]);
   return (
     <div
       className="canvas-pane"
@@ -35,7 +48,7 @@ export function Canvas({
     >
       <SceneBoundary path={document.path}>
         <Excalidraw
-          initialData={{ ...scene, scrollToContent: true }}
+          initialData={{ ...scene, scrollToContent: active }}
           excalidrawAPI={(api) => {
             editor.current = api;
             register(document.path, api);
@@ -66,7 +79,7 @@ export function Canvas({
           theme={theme}
           name={document.path.replace(/\.excalidraw$/, "")}
           handleKeyboardGlobally={false}
-          autoFocus={active}
+          autoFocus={active && !globalThis.document.activeElement?.closest(".codex-panel")}
           aiEnabled={false}
           onLinkOpen={(element, event) => {
             if (!isTauri() || !element.link) return;

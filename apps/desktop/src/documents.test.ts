@@ -78,6 +78,65 @@ afterEach(() => {
 });
 
 describe("document lifecycle", () => {
+  it("applies an agent save to a clean canvas without creating a conflict", async () => {
+    const { fs, store } = await setup();
+    const updated = await store.applyAgentEdit("a.excalidraw", "hash-initial", content("agent"),
+      () => fs.save("a.excalidraw", content("agent"), "hash-initial"));
+    expect(store.get("a.excalidraw")).toMatchObject({ content: content("agent"), savedHash: updated.hash,
+      revision: 1, dirty: false, conflict: null });
+    await store.reconcile("a.excalidraw");
+    expect(store.get("a.excalidraw")?.conflict).toBeNull();
+  });
+  it("rejects an agent edit when the canvas changed since its read", async () => {
+    const { fs, store } = await setup();
+    store.change("a.excalidraw", content("local"), 0);
+    await expect(store.applyAgentEdit("a.excalidraw", "hash-initial", content("agent"),
+      () => fs.save("a.excalidraw", content("agent"), "hash-initial"))).rejects.toThrow("canvas changed");
+    expect(fs.writes).toEqual([]);
+    expect(store.get("a.excalidraw")?.content).toBe(content("local"));
+  });
+  it("preserves the live canvas if an edit arrives during the agent's atomic save", async () => {
+    const { fs, store } = await setup();
+    const gate = deferred<DiskSnapshot>();
+    const saving = store.applyAgentEdit("a.excalidraw", "hash-initial", content("agent"), async () => {
+      await gate.promise;
+      return fs.save("a.excalidraw", content("agent"), "hash-initial");
+    });
+    store.change("a.excalidraw", content("local"), 0);
+    gate.resolve(disk("agent"));
+    await saving;
+    expect(store.get("a.excalidraw")).toMatchObject({ content: content("local"), dirty: true,
+      conflict: { disk: { content: content("agent") } } });
+    expect(fs.files.get("a.excalidraw")?.content).toBe(content("agent"));
+    expect([...fs.files.values()].some((file) => file.content === content("local"))).toBe(true);
+  });
+  it("holds concurrent autosave until an agent write completes", async () => {
+    const { fs, store } = await setup();
+    const gate = deferred<DiskSnapshot>();
+    const agent = store.applyAgentEdit("a.excalidraw", "hash-initial", content("agent"), async () => {
+      await gate.promise;
+      return fs.save("a.excalidraw", content("agent"), "hash-initial");
+    });
+    const autosave = store.save("a.excalidraw");
+    gate.resolve(disk("agent"));
+    await Promise.all([agent, autosave]);
+    expect(fs.writes).toEqual([content("agent")]);
+  });
+  it("flushes the chosen drawing before an agent read", async () => {
+    const { fs, store } = await setup();
+    store.change("a.excalidraw", content("local"), 0);
+    await store.prepareAgentRead("a.excalidraw");
+    expect(fs.files.get("a.excalidraw")?.content).toBe(content("local"));
+  });
+  it("preserves an agent save failure and rejects work on a disposed workspace", async () => {
+    const { store } = await setup();
+    await expect(store.applyAgentEdit("a.excalidraw", "hash-initial", content("agent"), async () => {
+      throw { code: "uncertain", message: "Save timed out; reread" };
+    })).rejects.toMatchObject({ code: "uncertain" });
+    expect(store.get("a.excalidraw")).toMatchObject({ content: content("initial"), error: "Save timed out; reread", saving: false });
+    store.dispose();
+    await expect(store.prepareAgentRead("a.excalidraw")).rejects.toThrow("closed");
+  });
   it("does not rewrite a restored or untouched scene", async () => {
     const { fs, store } = await setup();
     await store.open("a.excalidraw");

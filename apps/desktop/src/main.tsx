@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import "@excalidraw/excalidraw/index.css";
 import "./styles.css";
+import "./codex.css";
 import { App } from "./App";
 import { Viewer } from "./Viewer";
 

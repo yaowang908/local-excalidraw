@@ -1,11 +1,11 @@
 ---
 name: edit-local-excalidraw
-description: Create or edit .excalidraw drawings in the user’s OneDrive Excalidraw folder and display the saved result in the Local Excalidraw macOS app. Use for local diagram file edits, labels, shapes, connections, or layout changes.
+description: Create or edit .excalidraw drawings in a user-selected drawing folder and display the saved result in the Local Excalidraw macOS app. Use for local diagram file edits, labels, shapes, connections, or layout changes.
 ---
 
 # Edit Local Excalidraw
 
-Save an ordinary `.excalidraw` file and visibly open it in Local Excalidraw. Default drawing workspace: `/absolute/path/to/drawings`. Use this OneDrive-synced folder for both creation and updates, and select the same folder in Local Excalidraw. Respect an explicitly chosen drawing folder instead. The source checkout at `/absolute/path/to/Local-exclidraw` contains the MCP implementation; it is not the drawing workspace. The former `/absolute/path/to/Local-exclidraw` folder is no longer the default. Quote absolute paths in shell commands.
+Save an ordinary `.excalidraw` file and visibly open it in Local Excalidraw. Use the drawing folder explicitly selected by the user, or verify the active app workspace and connected MCP server root. Ask for the folder when neither is known. Locate the source checkout from the current repository or a user-supplied path when implementation details are needed; it is not the drawing workspace. Never assume a home directory, cloud provider, Node installation, or checkout location. Quote absolute paths in shell commands.
 
 ## Resolve the workspace and file
 
@@ -17,7 +17,7 @@ If the connected server targets another folder, use a temporary stdio MCP client
 
 ## Edit and verify
 
-Check that the OneDrive folder exists and the target file is locally readable before editing. If a drawing is cloud-only, allow OneDrive to download it (or use Finder’s Always Keep on This Device) or report the access failure; do not replace an unavailable drawing with an empty scene. List only the relevant folders rather than reading every drawing and forcing unnecessary downloads. A local save does not confirm OneDrive upload or cross-device synchronization. If OneDrive delivers a concurrent revision, re-read and reconcile using the same hash/conflict workflow.
+Check that the chosen drawing folder exists and the target file is locally readable before editing. If a drawing is cloud-only, allow the cloud provider to download it (or use Finder’s Always Keep on This Device) or report the access failure; do not replace an unavailable drawing with an empty scene. List only the relevant folders rather than reading every drawing and forcing unnecessary downloads. A local save does not confirm cloud upload or cross-device synchronization. If the cloud provider delivers a concurrent revision, re-read and reconcile using the same hash/conflict workflow.
 
 - Use workspace-relative document paths. Parent folders must exist. Hidden paths, symlinks, absolute document paths, and traversal are rejected.
 - Read with `read_diagram` before changing an existing drawing. Identify actual semantic/native IDs; do not infer them from labels alone.
@@ -33,6 +33,6 @@ Cooperative app/MCP writes share an advisory lock and atomic rename: a crash lea
 
 Use `mcp__cua_repl` for UI interaction. Get the app with `cua.getApp("Local Excalidraw")`, inspect its current state, and use the workspace button → **Open workspace in window…** (⌘O) when needed. In the macOS folder picker, use ⌘⇧G, enter the absolute workspace path, confirm the path, then click **Open**. This can open another window; inspect the window titles and bind the correct window rather than assuming the first window is the target.
 
-Verify the sidebar shows the intended absolute workspace path. Select the saved drawing in the file tree, expanding its folder if necessary, or use **Open drawing…** (⇧⌘O). Inspect fresh accessibility state after actions. If the tree is stale, use **Refresh workspace**. Clean open drawings reload external changes automatically; fallback polling usually takes about two seconds. Dirty drawings keep their local buffer and show conflict choices: preserve both versions and do not discard unsaved work without authorization.
+Select the intended workspace through the folder picker; the displayed folder name alone cannot distinguish same-named folders. Select the saved drawing in the file tree, expanding its folder if necessary, or use **Open drawing…** (⇧⌘O). Inspect fresh accessibility state after actions. If the tree is stale, use **Refresh workspace**. Clean open drawings reload external changes automatically; fallback polling usually takes about two seconds. Dirty drawings keep their local buffer and show conflict choices: preserve both versions and do not discard unsaved work without authorization.
 
 Verify the correct drawing tab is active, its status reports **Saved locally**, and inspect a screenshot for label legibility, overlap, clipped text, and connector placement. MCP cannot render PNGs; use the desktop canvas for visual verification. If the app cannot be opened or the result cannot be inspected, report that limitation separately from successful file saving. Finish with the absolute drawing file link and a concise description of the edit and verification.
